@@ -260,7 +260,6 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         assert self.t_prev <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to t_prev {self.t_prev}"
         self.X_prev_day = X[self.prev_day_idx]
         self.X_t_skip = X[self.skip_day_idx]
-        self.X_next_avail_day = X[self.skip_day_idx + 1]
 
         self.device = device
 
@@ -269,24 +268,20 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
             if self.batch_size is None:
                 indices_prev = np.arange(self.X_prev_day.shape[0])
                 indices_t_skip = np.arange(self.X_t_skip.shape[0])
-                indices_next_avail = np.arange(self.X_next_avail_day.shape[0])
             else:
                 # Batched behavior: sample random indices
                 indices_prev = np.random.randint(0, self.X_prev_day.shape[0], size=self.batch_size)
                 indices_t_skip = np.random.randint(0, self.X_t_skip.shape[0], size=self.batch_size)
-                indices_next_avail = np.random.randint(0, self.X_next_avail_day.shape[0], size=self.batch_size)
 
             x_prev_day = torch.from_numpy(
                 self.X_prev_day[indices_prev]).float().to(self.device)
             x_t_skip = torch.from_numpy(
                 self.X_t_skip[indices_t_skip]).float().to(self.device)
-            x_next_avail_day = torch.from_numpy(
-                self.X_next_avail_day[indices_next_avail]).float().to(self.device)
 
             t = torch.full((x_prev_day.shape[0],), float(
                 self.t_prev), device=self.device)
 
-            yield (t, x_prev_day, x_t_skip, x_next_avail_day)
+            yield (t, x_prev_day, x_t_skip, self.t_skip)
 
     def __len__(self):
         if self.batch_size is None:

@@ -51,7 +51,6 @@ class CellMNN(pl.LightningModule):
         latent_dim: int,
         lr: float,
         days_w_data: list[int],
-        t_skip: int,
         log_every_n_epochs: int = 10,
         n_trajectories: int = 3,
         train_on_skip_day: bool = False,
@@ -95,8 +94,6 @@ class CellMNN(pl.LightningModule):
         self.days_w_data = days_w_data
         self.min_t = self.days_w_data[0]
         self.max_t = self.days_w_data[-1] + self.dt
-        # TODO can we drop this here and pass t_val as a input in validation step function?
-        self.t_skip = t_skip
         # Number of time steps at which to sample the trajectory
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
@@ -257,27 +254,27 @@ class CellMNN(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
         # (I, D)
-        t, x_prev_day, x_t_skip, x_next_avail_day = batch
+        t, x_t, x_t_skip, t_skip = batch
 
-        x_prev_day = rearrange(x_prev_day, 'i d -> i 1 d')
+        x_t = rearrange(x_t, 'i d -> i 1 d')
         t = rearrange(t, 'i -> i 1 1')
-        decode_t = torch.full_like(t, self.t_skip)
+        decode_t = torch.full_like(t, t_skip)
 
-        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_prev_day, t, decode_t)
+        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, decode_t)
         pred_dist = x_traj[:, 0, :].detach()
 
         A = P_inv @ torch.diag_embed(eigenvals) @ P
         self.log_A_eigenvalues(A)
 
         mmd = self.loss_fn(pred_dist, x_t_skip)
-        self.log(f"val_mmd(t_skip={self.t_skip})", mmd.cpu().item())
+        self.log(f"val_mmd(t_skip={t_skip})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
             x_t_skip.cpu().numpy(),
             num_iter_max=num_iter_max
         )
-        self.log(f"val_emd(t_skip={self.t_skip})", emd)
+        self.log(f"val_emd(t_skip={t_skip})", emd)
         return emd
     
     def test_step(self, batch, batch_idx):
