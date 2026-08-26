@@ -149,30 +149,30 @@ class CellMNN(pl.LightningModule):
         # TODO: optionally decode on more time points for kinetic energy reg
         # (B, 1, D), (B, 1, 1), (B, T, D), (B, T, 1)
         x_t, t, x_population, t_population = batch
-        B, n_days, D = x_population.shape
+        B, T, D = x_population.shape
 
-        # Decode directly at the days present in the batch (t_population
+        # Decode directly at the timepoints present in the batch (t_population
         # already excludes t_skip unless train_on_skip_day is set)
         x_traj, x_dot_traj, A = self.forward(x_t, t, t_population)
 
-        # Create mask to exclude only the initial condition day
+        # Create mask to exclude only the initial condition timepoint
         valid_mask_raw = (t_population.squeeze(-1) > t.squeeze(-1))
         # Create cumulative sum along time dimension to detect first True and beyond
         cumulative_true = torch.cumsum(valid_mask_raw.to(torch.int), dim=1)
         # First True will have cumulative sum of 1, subsequent Trues will have > 1
         valid_mask_i = [(cumulative_true == i) &
-                        valid_mask_raw for i in range(1, n_days)]
+                        valid_mask_raw for i in range(1, T)]
 
         mmd_loss_future = 0.0
 
-        for d in range(n_days):
+        for i_t in range(T):
             for i, valid_mask in enumerate(valid_mask_i):
-                # (B,)  which cells can supervise day d?
-                m = valid_mask[:, d]
+                # (B,)  which cells can supervise timepoint i_t?
+                m = valid_mask[:, i_t]
                 if m.any():
                     mmd_loss_future += self.loss_fn(
-                        x_traj[m, d, :],   # (N_d , D)
-                        x_population[m, d, :]
+                        x_traj[m, i_t, :],   # (N_t , D)
+                        x_population[m, i_t, :]
                     ) * self.gamma ** i
 
         kinetic_loss = x_dot_traj.square().mean()
