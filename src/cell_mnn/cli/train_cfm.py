@@ -20,7 +20,7 @@ from cell_mnn.utils import save_hyperparams_to_json, fix_seed
 
 
 # Parse command-line arguments
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description='Train a Flow Matching model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument('--val_ds_name', type=str, default=None,)
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 class CFMVelocityMLP(torch.nn.Module):
@@ -80,11 +80,11 @@ class FlowMatchingModel(pl.LightningModule):
         # index of day to skip for evaluation [0, last_day_idx]
         self.skip_day_idx = skip_day_idx
         self.days = days
-        self.skip_day = days[skip_day_idx] 
-        self.prev_day = days[skip_day_idx - 1] 
+        self.skip_day = days[skip_day_idx]
+        self.prev_day = days[skip_day_idx - 1]
 
         self.lr = lr
-        self.dt = 0.01  
+        self.dt = 0.01
         self.mmd_loss = MMDLoss(sigma=1.0)
 
     def forward(self, obs):
@@ -109,23 +109,23 @@ class FlowMatchingModel(pl.LightningModule):
         t, x_prev_day, x_skip_day, _ = batch
         t_span = torch.arange(self.prev_day, self.skip_day + self.dt, self.dt)
         traj = self.node.trajectory(
-            x_prev_day,  
+            x_prev_day,
             t_span=t_span,
         )
         # get predicted distribution at the last timepoint
         pred_dist = traj[-1, :, :]
 
-        mmd = self.mmd_loss(pred_dist, x_skip_day)    
+        mmd = self.mmd_loss(pred_dist, x_skip_day)
         self.log(f"val_mmd(skip_day={self.skip_day})", mmd.cpu().item())
-        
+
         emd = compute_wasserstein(
-            pred_dist.cpu().numpy(), 
+            pred_dist.cpu().numpy(),
             x_skip_day.cpu().numpy(),
             num_iter_max=num_iter_max)
         self.log(f"val_emd(skip_day={self.skip_day})", emd)
 
         return emd
- 
+
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
@@ -136,15 +136,15 @@ class FlowMatchingModel(pl.LightningModule):
         return optimizer
 
 
-if __name__ == "__main__":
-    args = parse_args()
+def main(argv=None):
+    args = parse_args(argv)
     fix_seed(args.seed, use_det_algos=False)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     sigma = 0.1
-    latent_dim = 5  
+    latent_dim = 5
     lr = 1e-3
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -155,13 +155,13 @@ if __name__ == "__main__":
         val_ds_name=args.val_ds_name,
         skip_day_idx=args.skip_day_idx,
         train_on_all_days=False,
-        method=args.method,  
+        method=args.method,
         device=device,
         batch_size=args.batch_size,
     )
 
     # Use batch_size=None since the dataset is already returning a full batch.
-    num_workers = 0  
+    num_workers = 0
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers)
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
         dim=latent_dim,
         skip_day_idx=args.skip_day_idx,
         lr=lr,
-        days=train_dataset.days,  
+        days=train_dataset.days,
     ).to(device)
     model_name = f"{args.method}_5-dim_pca_skip_day_idx{args.skip_day_idx}_{timestamp}"
 
@@ -189,7 +189,7 @@ if __name__ == "__main__":
         "timestamp": timestamp,
         "use_cuda": use_cuda,
         "lr": lr,
-        "wandb_url": wandb_logger.experiment.url,  
+        "wandb_url": wandb_logger.experiment.url,
     }
     wandb_logger.experiment.config.update(additional_config)
 
@@ -207,7 +207,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         monitor=f'val_emd(skip_day={train_dataset.days[args.skip_day_idx]})',
         dirpath=f'weights/checkpoints/{model_name}/',
-        filename=f'best-model',  
+        filename=f'best-model',
         save_top_k=1,
         mode='min',
         save_last=False,
@@ -219,7 +219,7 @@ if __name__ == "__main__":
         max_epochs=args.epochs,
         enable_checkpointing=True,
         check_val_every_n_epoch=args.check_val_every_n_epoch,
-        max_time={"minutes": args.time_limit},  
+        max_time={"minutes": args.time_limit},
         fast_dev_run=args.debug,
         logger=wandb_logger,
         callbacks=[early_stop_callback, checkpoint_callback]
@@ -254,3 +254,7 @@ if __name__ == "__main__":
     hyperparams_path = os.path.join(
         f'weights/checkpoints/{model_name}/', 'hyperparameters.json')
     save_hyperparams_to_json(wandb_logger, hyperparams_path)
+
+
+if __name__ == "__main__":
+    main()

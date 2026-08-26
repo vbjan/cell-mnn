@@ -7,20 +7,8 @@ Legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[-]` skipped (add a re
 
 ---
 
-## Open decision (settle before Phase 2)
-
-How will downstream projects consume Cell-MNN?
-
-- [ ] **A — Inference only:** they load trained checkpoints and call the model.
-      → `from_checkpoint` + `predict_*` is the API that matters; the datasets can stay
-      research-grade and Phase 2's data work shrinks to path configuration.
-- [x] **B — Training on their own data:** they fit new models on their own timecourses.
-      → `get_data` / dataset construction needs the full rework, and the device-owning
-      `IterableDataset` pattern (`batch_size=None`, `.to(device)` inside `__iter__`) becomes a
-      real liability under DDP and `num_workers > 0`.
-- [ ] **C — Both.**
-
-Chosen: _(fill in)_
+## Decision
+The repo should allow the end-user to train models on their *own* data
 
 ---
 
@@ -67,9 +55,9 @@ working directory.
 
 ### 1.3 Entry points
 
-- [ ] Move `train_mnn.py` and `train_cfm.py` bodies into `src/cell_mnn/cli/`, each with a
+- [x] Move `train_mnn.py` and `train_cfm.py` bodies into `src/cell_mnn/cli/`, each with a
       `main(argv=None)` and the `if __name__ == "__main__"` block reduced to `main()`.
-- [ ] Leave `train_mnn.py` / `train_cfm.py` at the repo root as thin shims so documented commands
+- [x] Leave `train_mnn.py` / `train_cfm.py` at the repo root as thin shims so documented commands
       keep working.
 - [ ] Decide where `data/inflate_data.py` and `data/recompute_pca.py` live — importable utilities
       under `cell_mnn.data.tools`, or scripts that stay out of the package.

@@ -15,7 +15,7 @@ import uuid
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"   # force determinism
 
 # Parse command-line arguments
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description='Train an MNN prediction model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
@@ -55,12 +55,11 @@ def parse_args():
                         help='Number of constant dimensions')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
-
-    args = parse_args()
+def main(argv=None):
+    args = parse_args(argv)
     fix_seed(args.seed, use_det_algos=False)
     use_cuda = True
     device = torch.device('cuda' if use_cuda else 'cpu')
@@ -133,7 +132,7 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(
         monitor=f'val_emd(skip_day={train_dataset.skip_day})',
         dirpath=f'weights/mnn/{model_name}/',
-        filename=f'best-model',  
+        filename=f'best-model',
         save_top_k=1,
         mode='min',
         save_last=False,
@@ -141,7 +140,7 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         accelerator="gpu" if use_cuda else "cpu",
-        devices=1,          
+        devices=1,
         max_epochs=args.epochs,
         enable_checkpointing=True,
         check_val_every_n_epoch=args.check_val_every_n_epoch,
@@ -177,7 +176,7 @@ if __name__ == "__main__":
     )
     test_results = test_trainer.test(model, test_loader)
 
-    # Log test results 
+    # Log test results
     for metric_name, value in test_results[0].items():
         wandb_logger.experiment.summary[f"{metric_name}"] = value
 
@@ -186,3 +185,7 @@ if __name__ == "__main__":
         json.dump(test_results[0], f)
 
     print(f"Test results: {test_results}")
+
+
+if __name__ == "__main__":
+    main()
