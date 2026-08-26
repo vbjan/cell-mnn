@@ -46,6 +46,9 @@ working directory.
 
 # Questions to resolve
 - too heavy on imports? -> environment.yaml contains way too much?
+- hard coded time grid in CellMNN?
+- What to do about train scripts?
+- How/what to test?
 
 ### 1.2 `pyproject.toml`
 
