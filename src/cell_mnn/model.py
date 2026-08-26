@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 from einops import rearrange, repeat
-import wandb
 
 from .metrics import MMDLoss, compute_wasserstein
 
@@ -227,6 +227,11 @@ class CellMNN(pl.LightningModule):
         tag : str
               Base key under which histograms are stored in wandb.
         """
+        if not isinstance(self.logger, WandbLogger):
+            return
+
+        import wandb
+
         with torch.no_grad():
             # drop the singleton time dim if it is present
             A = A.squeeze(1)                     # (B, D, D)
