@@ -51,8 +51,6 @@ def parse_args(argv=None):
                         help='Sigma for MMD loss')
     parser.add_argument('--ds_name', type=str, default='embryoid',)
     parser.add_argument('--val_ds_name', type=str, default=None,)
-    parser.add_argument('--num_const_dims', type=int, default=0,
-                        help='Number of constant dimensions')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -86,7 +84,6 @@ def main(argv=None):
     model = CellMNN(
         latent_dim=latent_dim,
         lr=args.lr,
-        num_const_dims=args.num_const_dims,
         lambda_kinetic=args.lambda_kinetic,
         gamma=args.gamma,
         depth=args.depth,

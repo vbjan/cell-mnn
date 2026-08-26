@@ -15,9 +15,7 @@ def predict_gene_interaction(
 
     As = []
     for model in models:
-        P, eigenvals = model.encode(x_sample, t)  
-        P_inv = torch.linalg.inv(P)  
-        A = model.construct_A(P_inv, eigenvals, P).squeeze().detach() # (N, n_pcs, n_pcs)
+        A = model.encode(x_sample, t).squeeze().detach()  # (N, n_pcs, n_pcs)
         As.append(A)
     A = torch.stack(As, dim=0).mean(dim=0)  # Average over models (N, n_pcs, n_pcs)
 

@@ -48,7 +48,6 @@ class CellMNN(pl.LightningModule):
         self,
         latent_dim: int,
         lr: float,
-        num_const_dims: int = 0,
         lambda_kinetic: float = 0.1,
         gamma: float = 0.7,
         depth: int = 3,
@@ -64,12 +63,10 @@ class CellMNN(pl.LightningModule):
 
         # MLP
         self.latent_dim = latent_dim
-        self.const_dims = num_const_dims  
-        self.dynamic_dims = self.latent_dim - self.const_dims
-        
-        mlp_out_dim =  self.latent_dim ** 2 + self.dynamic_dims  
 
-        self.mlp = MLP(in_dim=self.latent_dim + 1,  
+        mlp_out_dim = self.latent_dim ** 2
+
+        self.mlp = MLP(in_dim=self.latent_dim + 1,
                        out_dim=mlp_out_dim,
                        width=width,
                        depth=depth,
@@ -102,23 +99,13 @@ class CellMNN(pl.LightningModule):
         assert x_t.shape[1] == t.shape[1] == t.shape[2] == decode_ts.shape[
             2] == 1, "x_t, t and decode_ts must have ones in the expected dimensions"
 
-        P, eigenvals = self.encode(x_t, t)
-        
-        z_t = torch.einsum('btij,bti->btj', P, x_t)
+        A = self.encode(x_t, t)  # (B, 1, D, D)
 
-        # Solve x_dot = A x with condition x(t) := x_t
-        A_diag = torch.diag_embed(eigenvals)  # (B, 1, D, D)
-        
-        # Solve the ODE in the diagonalized space
-        z_system_traj = self.decode_trajectory(A_diag, z_t, t, decode_ts)
+        system_traj = self.decode_trajectory(A, x_t, t, decode_ts)  # (B, T, D, 2)
+        x_traj = system_traj.select(dim=-1, index=0)  # (B, T, D)
+        x_dot_traj = system_traj.select(dim=-1, index=1)  # (B, T, D)
 
-        # The last dimension contains the state variable and the first 
-        P_inv = torch.linalg.inv(P)  
-        P_inv = repeat(P_inv, 'b 1 d1 d2 -> b t d1 d2', t=decode_ts.shape[1])  
-        x_traj =  torch.einsum('btij,bti->btj', P_inv, z_system_traj.select(dim=-1, index=0))   # (B, T, D)
-        x_dot_traj = torch.einsum('btij,bti->btj', P_inv, z_system_traj.select(dim=-1, index=1))    # (B, T, D)
-
-        return x_traj, P_inv, eigenvals, P, x_dot_traj
+        return x_traj, x_dot_traj, A
 
     def encode(
         self,
@@ -127,17 +114,12 @@ class CellMNN(pl.LightningModule):
     ):
         # Forward pass MLP - Broadcast x_t to match the time dimension of decode_ts
         obs = torch.cat((x_t, t), dim=-1)  # B 1 D+1
-        rep = self.mlp(obs)   # (B, 1, latent_dims ** 2 + latent_dim)
+        rep = self.mlp(obs)   # (B, 1, latent_dim ** 2)
 
-        eigenvals = rep[..., :self.dynamic_dims]  # (B, 1, dynamic_dims)
-        # Add a zero column to eigenvals for the constant dimension
-        zeros = torch.zeros(eigenvals.shape[0], eigenvals.shape[1], self.const_dims, device=eigenvals.device)
-        eigenvals = torch.cat([eigenvals, zeros], dim=-1)  # (B, 1, D)
-
-        P = rearrange(
-            rep[..., self.dynamic_dims:], 'b 1 (d1 d2) -> b 1 d1 d2', d1=self.latent_dim, d2=self.latent_dim
-        ) + torch.eye(self.latent_dim, device=rep.device)
-        return P, eigenvals
+        A = rearrange(
+            rep, 'b 1 (d1 d2) -> b 1 d1 d2', d1=self.latent_dim, d2=self.latent_dim
+        )
+        return A
 
     def decode_trajectory(
         self,
@@ -163,18 +145,15 @@ class CellMNN(pl.LightningModule):
 
         return system_traj
 
-    def construct_A(self, P_inv, eigenvals, P):
-        A_diag = torch.diag_embed(eigenvals)  
-        return P_inv @ A_diag @ P  
-
     def training_step(self, batch, batch_idx):
+        # TODO: optionally decode on more time points for kinetic energy reg
         # (B, 1, D), (B, 1, 1), (B, T, D), (B, T, 1)
         x_t, t, x_population, t_population = batch
         B, n_days, D = x_population.shape
 
         # Decode directly at the days present in the batch (t_population
         # already excludes t_skip unless train_on_skip_day is set)
-        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, t_population)
+        x_traj, x_dot_traj, A = self.forward(x_t, t, t_population)
 
         # Create mask to exclude only the initial condition day
         valid_mask_raw = (t_population.squeeze(-1) > t.squeeze(-1))
@@ -197,20 +176,16 @@ class CellMNN(pl.LightningModule):
                     ) * self.gamma ** i
 
         kinetic_loss = x_dot_traj.square().mean()
-        det_loss = torch.mean(1.0 / (torch.abs(torch.det(P)) + 1e-4))
-        loss = mmd_loss_future + self.lambda_kinetic * kinetic_loss + det_loss
+        loss = mmd_loss_future + self.lambda_kinetic * kinetic_loss
 
         # Calculate trace for each matrix in the batch and then average
-        tr_A = eigenvals.sum(-1).mean()
+        tr_A = torch.diagonal(A, dim1=-2, dim2=-1).sum(-1).mean()
         self.log('Tr(A)', tr_A)
         self.log('||A - A^T||_2',
-                 (P - P.transpose(dim0=-2, dim1=-1)).square().mean())
+                 (A - A.transpose(dim0=-2, dim1=-1)).square().mean())
         self.log('train_loss', loss)
         self.log('mmd_loss_future', mmd_loss_future)
         self.log('kinetic_loss', kinetic_loss)
-        self.log('deviation_from_identity',
-                 torch.mean((P -  torch.eye(self.latent_dim, device=self.device)) ** 2)
-        )
         return loss
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
@@ -221,10 +196,9 @@ class CellMNN(pl.LightningModule):
         t = rearrange(t, 'i -> i 1 1')
         decode_t = torch.full_like(t, t_skip)
 
-        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, decode_t)
+        x_traj, x_dot_traj, A = self.forward(x_t, t, decode_t)
         pred_dist = x_traj[:, 0, :].detach()
 
-        A = P_inv @ torch.diag_embed(eigenvals) @ P
         self.log_A_eigenvalues(A)
 
         mmd = self.loss_fn(pred_dist, x_t_skip)
