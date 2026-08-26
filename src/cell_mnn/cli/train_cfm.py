@@ -81,7 +81,7 @@ class FlowMatchingModel(pl.LightningModule):
         self.skip_day_idx = skip_day_idx
         self.days = days
         self.t_skip = days[skip_day_idx]
-        self.prev_day = days[skip_day_idx - 1]
+        self.t_prev = days[skip_day_idx - 1]
 
         self.lr = lr
         self.dt = 0.01
@@ -107,7 +107,7 @@ class FlowMatchingModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
         t, x_prev_day, x_t_skip, _ = batch
-        t_span = torch.arange(self.prev_day, self.t_skip + self.dt, self.dt)
+        t_span = torch.arange(self.t_prev, self.t_skip + self.dt, self.dt)
         traj = self.node.trajectory(
             x_prev_day,
             t_span=t_span,

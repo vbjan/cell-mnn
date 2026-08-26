@@ -88,7 +88,6 @@ def main(argv=None):
         lr=args.lr,
         days_w_data=train_dataset.days,
         t_skip=train_dataset.t_skip,
-        prev_day=train_dataset.prev_day,
         log_every_n_epochs=3,
         n_trajectories=3,
         train_on_skip_day=args.train_on_all_days,

@@ -52,7 +52,6 @@ class CellMNN(pl.LightningModule):
         lr: float,
         days_w_data: list[int],
         t_skip: int,
-        prev_day: int | None = None,
         log_every_n_epochs: int = 10,
         n_trajectories: int = 3,
         train_on_skip_day: bool = False,
@@ -98,8 +97,6 @@ class CellMNN(pl.LightningModule):
         self.max_t = self.days_w_data[-1] + self.dt
         # TODO can we drop this here and pass t_val as a input in validation step function?
         self.t_skip = t_skip
-        # TODO Drop this?
-        self.prev_day = prev_day or t_skip - 1
         # Number of time steps at which to sample the trajectory
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
@@ -264,9 +261,6 @@ class CellMNN(pl.LightningModule):
 
         x_prev_day = rearrange(x_prev_day, 'i d -> i 1 d')
         t = rearrange(t, 'i -> i 1 1')
-        # TODO are we able to drop prev_day?? Validate somwehow else?
-        assert torch.isclose(t, torch.tensor(self.prev_day).float(
-        ), atol=1e-3).all(), "t is not equal to skip_day"
         decode_t = torch.full_like(t, self.t_skip)
 
         x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_prev_day, t, decode_t)

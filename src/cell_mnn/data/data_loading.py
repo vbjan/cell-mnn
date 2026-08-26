@@ -41,7 +41,7 @@ class FlowMatchingDataset(IterableDataset):
         self.days = days
         self.skip_day_idx = skip_day_idx
         self.t_skip = days[skip_day_idx]
-        self.prev_day = days[skip_day_idx - 1]
+        self.t_prev = days[skip_day_idx - 1]
         self.train_on_skip_day = train_on_skip_day
         self.latent_dim = X[0].shape[-1]
         assert 1 <= self.skip_day_idx <= self.n_days - \
@@ -255,9 +255,9 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
 
         # Predict distribution at t_skip from previous day
         self.prev_day_idx = prev_day_idx if prev_day_idx is not None else skip_day_idx - 1
-        self.prev_day = days[self.prev_day_idx] if self.prev_day_idx is not None else days[self.skip_day_idx - 1]
+        self.t_prev = days[self.prev_day_idx] if self.prev_day_idx is not None else days[self.skip_day_idx - 1]
 
-        assert self.prev_day <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to prev_day {self.prev_day}"
+        assert self.t_prev <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to t_prev {self.t_prev}"
         self.X_prev_day = X[self.prev_day_idx]
         self.X_t_skip = X[self.skip_day_idx]
         self.X_next_avail_day = X[self.skip_day_idx + 1]
@@ -284,7 +284,7 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
                 self.X_next_avail_day[indices_next_avail]).float().to(self.device)
 
             t = torch.full((x_prev_day.shape[0],), float(
-                self.prev_day), device=self.device)
+                self.t_prev), device=self.device)
 
             yield (t, x_prev_day, x_t_skip, x_next_avail_day)
 
@@ -314,7 +314,7 @@ class MnnDataset(IterableDataset):
         self.train_on_skip_day = train_on_skip_day
         n_days = len(X)
         self.latent_dim = X[0].shape[-1]
-        self.prev_day = days[skip_day_idx - 1] 
+        self.t_prev = days[skip_day_idx - 1]
         self.days = days
 
         self.skip_day_idx = skip_day_idx
@@ -428,7 +428,7 @@ class MixedDataset(MnnDataset):
         self.dataset_iterators = [iter(dataset) for dataset in datasets]
         self.latent_dim = datasets[0].latent_dim
         self.t_skip = datasets[0].t_skip
-        self.prev_day = datasets[0].prev_day
+        self.t_prev = datasets[0].t_prev
         self.days = [day for dataset in datasets for day in dataset.days]
         self.days = sorted(list(set(self.days)))  # Remove duplicates and sort
         self.device = datasets[0].device
