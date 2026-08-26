@@ -1,9 +1,7 @@
 import torch
 from torch import nn
-import numpy as np
 import pytorch_lightning as pl
-from einops import rearrange, reduce, repeat
-import matplotlib.pyplot as plt
+from einops import rearrange, repeat
 import wandb
 
 from .metrics import MMDLoss, compute_wasserstein
@@ -50,10 +48,6 @@ class CellMNN(pl.LightningModule):
         self,
         latent_dim: int,
         lr: float,
-        days_w_data: list[int],
-        log_every_n_epochs: int = 10,
-        n_trajectories: int = 3,
-        train_on_skip_day: bool = False,
         num_const_dims: int = 0,
         lambda_kinetic: float = 0.1,
         gamma: float = 0.7,
@@ -84,22 +78,8 @@ class CellMNN(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
 
-        # Trajectory logging parameters
-        self.log_every_n_epochs = log_every_n_epochs
-        self.n_trajectories = n_trajectories
-
-        # MNN
-        self.dt = 0.1
-        self.ode_order = 1  # Higher order tends to overfit
-        self.days_w_data = days_w_data
-        self.min_t = self.days_w_data[0]
-        self.max_t = self.days_w_data[-1] + self.dt
-        # Number of time steps at which to sample the trajectory
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
-
-        # If False, train on all time points except t_skip
-        self.train_on_skip_day = train_on_skip_day
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(),
@@ -186,25 +166,6 @@ class CellMNN(pl.LightningModule):
     def construct_A(self, P_inv, eigenvals, P):
         A_diag = torch.diag_embed(eigenvals)  
         return P_inv @ A_diag @ P  
-
-    def compute_uncertainty(
-        self,
-        A,  # (B, 1, D, D)
-        t,  # (B, 1, 1)
-        decode_ts  # (B, T, 1)
-    ):
-        batch_size, num_time_steps, _ = decode_ts.shape
-        delta_t = (decode_ts - t).unsqueeze(-1)  # (B, T, 1, 1)
-        phi_t = torch.linalg.matrix_exp(A * delta_t)  # (B, T, D, D)
-
-        # Assume initial independent noise
-        noise_var = 0.005 * torch.eye(self.latent_dim, device=phi_t.device)
-        noise_var = repeat(noise_var, 'd1 d2 -> b t d1 d2',
-                           b=batch_size, t=num_time_steps)  # (B, 1, D, D)
-
-        noise_var_traj = (
-            phi_t @ noise_var) @ phi_t.transpose(dim0=-2, dim1=-1)
-        return noise_var_traj  # (B, T, D, D)
 
     def training_step(self, batch, batch_idx):
         # (B, 1, D), (B, 1, 1), (B, T, D), (B, T, 1)
