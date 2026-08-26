@@ -39,7 +39,7 @@ class MLP(torch.nn.Module):
             for p in self.net[-1].parameters():   # last linear layer
                 p.mul_(init_scale)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
@@ -78,7 +78,7 @@ class CellMNN(pl.LightningModule):
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(self.parameters(),
                                       self.lr,
                                       weight_decay=self.weight_decay)
@@ -89,7 +89,7 @@ class CellMNN(pl.LightningModule):
             x_t: torch.Tensor, # (B, 1, D) Convention: (batch, time, feature) dimension
             t: torch.Tensor,  # (B, 1, 1)
             decode_ts: torch.Tensor # (B, T, 1), forward allows broadcasting along the time dimension!
-        ):
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # assert x_t, t and decode_ts are 3D tensors
         assert len(x_t.shape) == len(t.shape) == len(
             decode_ts.shape) == 3, "x_t, t and decode_ts must be 3D tensors"
@@ -109,9 +109,9 @@ class CellMNN(pl.LightningModule):
 
     def encode(
         self,
-        x_t,  # (B, 1, D)
-        t  # (B, 1, 1)
-    ):
+        x_t: torch.Tensor,  # (B, 1, D)
+        t: torch.Tensor  # (B, 1, 1)
+    ) -> torch.Tensor:  # (B, 1, D, D)
         # Forward pass MLP - predicts A directly from the concatenated state and time
         obs = torch.cat((x_t, t), dim=-1)  # B 1 D+1
         rep = self.mlp(obs)   # (B, 1, latent_dim ** 2)
@@ -123,11 +123,11 @@ class CellMNN(pl.LightningModule):
 
     def decode_trajectory(
         self,
-        A,  # (B, 1, D, D)
-        x_t,  # (B, 1, D)
-        t,  # (B, 1, 1)
-        decode_ts  # (B, T, 1)
-    ):
+        A: torch.Tensor,  # (B, 1, D, D)
+        x_t: torch.Tensor,  # (B, 1, D)
+        t: torch.Tensor,  # (B, 1, 1)
+        decode_ts: torch.Tensor  # (B, T, 1)
+    ) -> torch.Tensor:  # (B, T, D, 2)
         batch_size, num_time_steps, _ = decode_ts.shape
         delta_t = (decode_ts - t).unsqueeze(-1)  # (B, T, 1, 1)
         phi_t = torch.linalg.matrix_exp(A * delta_t)  # (B, T, D, D)
@@ -145,9 +145,13 @@ class CellMNN(pl.LightningModule):
 
         return system_traj
 
-    def training_step(self, batch, batch_idx):
-        # TODO: optionally decode on more time points for kinetic energy reg
+    def training_step(
+        self,
         # (B, 1, D), (B, 1, 1), (B, T, D), (B, T, 1)
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],  
+        batch_idx: int
+    ) -> torch.Tensor:
+        # TODO: optionally decode on more time points for kinetic energy reg
         x_t, t, x_population, t_population = batch
         B, T, D = x_population.shape
 
@@ -188,8 +192,13 @@ class CellMNN(pl.LightningModule):
         self.log('kinetic_loss', kinetic_loss)
         return loss
 
-    def validation_step(self, batch, batch_idx, num_iter_max=200_000):
-        # (I, D)
+    def validation_step(
+        self,
+        # (I,), (I, D), (I, D), scalar
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float],  
+        batch_idx: int,
+        num_iter_max: int = 200_000
+    ) -> float:
         t, x_t, x_t_skip, t_skip = batch
 
         x_t = rearrange(x_t, 'i d -> i 1 d')
@@ -212,10 +221,14 @@ class CellMNN(pl.LightningModule):
         self.log(f"val_emd(t_skip={t_skip})", emd)
         return emd
     
-    def test_step(self, batch, batch_idx):
+    def test_step(
+        self,
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float],
+        batch_idx: int
+    ) -> float:
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
-    def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues"):
+    def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues") -> None:
         if not isinstance(self.logger, WandbLogger):
             return
         import wandb
