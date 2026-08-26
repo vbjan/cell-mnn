@@ -112,7 +112,7 @@ class CellMNN(pl.LightningModule):
         x_t,  # (B, 1, D)
         t  # (B, 1, 1)
     ):
-        # Forward pass MLP - Broadcast x_t to match the time dimension of decode_ts
+        # Forward pass MLP - predicts A directly from the concatenated state and time
         obs = torch.cat((x_t, t), dim=-1)  # B 1 D+1
         rep = self.mlp(obs)   # (B, 1, latent_dim ** 2)
 
@@ -132,7 +132,7 @@ class CellMNN(pl.LightningModule):
         delta_t = (decode_ts - t).unsqueeze(-1)  # (B, T, 1, 1)
         phi_t = torch.linalg.matrix_exp(A * delta_t)  # (B, T, D, D)
         x_t = repeat(x_t, 'b 1 d -> b t d 1', t=decode_ts.shape[1])
-        x_traj = phi_t @ x_t  # (B, T, D)
+        x_traj = phi_t @ x_t  # (B, T, D, 1)
 
         # calculate first order derivative
         A_broadcast = repeat(A, 'b 1 d1 d2 -> b t d1 d2',
@@ -181,7 +181,7 @@ class CellMNN(pl.LightningModule):
         # Calculate trace for each matrix in the batch and then average
         tr_A = torch.diagonal(A, dim1=-2, dim2=-1).sum(-1).mean()
         self.log('Tr(A)', tr_A)
-        self.log('||A - A^T||_2',
+        self.log('mean((A - A^T)^2)',
                  (A - A.transpose(dim0=-2, dim1=-1)).square().mean())
         self.log('train_loss', loss)
         self.log('mmd_loss_future', mmd_loss_future)
