@@ -55,6 +55,7 @@ class CellMNN(pl.LightningModule):
         init_scale: float = 0.01,
         weight_decay: float = 1e-5,
         mmd_sigma: float = 1.0,
+        kinetic_grid_multiplier: int = 0,
     ):
         super(CellMNN, self).__init__()
 
@@ -77,6 +78,7 @@ class CellMNN(pl.LightningModule):
 
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
+        self.kinetic_grid_multiplier = kinetic_grid_multiplier
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(self.parameters(),
@@ -145,13 +147,33 @@ class CellMNN(pl.LightningModule):
 
         return system_traj
 
+    def _decode_dense_kinetic_grid(
+        self,
+        A: torch.Tensor,  # (B, 1, D, D)
+        x_t: torch.Tensor,  # (B, 1, D)
+        t: torch.Tensor,  # (B, 1, 1)
+        t_population: torch.Tensor  # (B, T, 1)
+    ) -> torch.Tensor:  # (B, T * kinetic_grid_multiplier, D)
+        """Re-decode dx/dt on a denser time grid for the kinetic energy regularizer."""
+        B, T, _ = t_population.shape
+        num_extra = T * (self.kinetic_grid_multiplier - 1)
+
+        t_min = t_population.min()
+        t_max = t_population.max()
+        extra_ts = t_min + (t_max - t_min) * torch.rand(
+            B, num_extra, 1, device=t_population.device, dtype=t_population.dtype)
+
+        dense_ts = torch.cat([t_population, extra_ts], dim=1)
+
+        dense_system_traj = self.decode_trajectory(A, x_t, t, dense_ts)  # (B, T', D, 2)
+        return dense_system_traj.select(dim=-1, index=1)
+
     def training_step(
         self,
         # (B, 1, D), (B, 1, 1), (B, T, D), (B, T, 1)
         batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],  
         batch_idx: int
     ) -> torch.Tensor:
-        # TODO: optionally decode on more time points for kinetic energy reg
         x_t, t, x_population, t_population = batch
         B, T, D = x_population.shape
 
@@ -179,7 +201,11 @@ class CellMNN(pl.LightningModule):
                         x_population[m, i_t, :]
                     ) * self.gamma ** i
 
-        kinetic_loss = x_dot_traj.square().mean()
+        if self.kinetic_grid_multiplier > 1:
+            kinetic_x_dot_traj = self._decode_dense_kinetic_grid(A, x_t, t, t_population)
+        else:
+            kinetic_x_dot_traj = x_dot_traj
+        kinetic_loss = kinetic_x_dot_traj.square().mean()
         loss = mmd_loss_future + self.lambda_kinetic * kinetic_loss
 
         # Calculate trace for each matrix in the batch and then average

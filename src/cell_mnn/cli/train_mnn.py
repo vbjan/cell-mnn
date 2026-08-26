@@ -43,6 +43,8 @@ def parse_args(argv=None):
                         help='Weight factor for kinetic energy regularizer.')
     parser.add_argument('--gamma', type=float, default=0.1,
                         help='Weight factor for kinetic energy regularizer.')
+    parser.add_argument('--kinetic_grid_multiplier', type=int, default=0,
+                        help='Factor by which to increase the number of timepoints for kinetic reg')
     parser.add_argument('--width', type=int, default=96, help='Width of MLP')
     parser.add_argument('--depth', type=int, default=4, help='Depth of MLP')
     parser.add_argument('--init_scale', type=float, default=0.01,
@@ -86,6 +88,7 @@ def main(argv=None):
         lr=args.lr,
         lambda_kinetic=args.lambda_kinetic,
         gamma=args.gamma,
+        kinetic_grid_multiplier=args.kinetic_grid_multiplier,
         depth=args.depth,
         width=args.width,
         init_scale=args.init_scale,
