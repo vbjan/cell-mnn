@@ -12,12 +12,12 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from torch.utils.data import DataLoader
-from lib.data.data_loading import get_datasets
+from cell_mnn.data.data_loading import get_datasets
 from torchdyn.core import NeuralODE
 from torchcfm.utils import torch_wrapper
 
-from lib.metrics import compute_wasserstein, MMDLoss
-from lib.utils import save_hyperparams_to_json, fix_seed
+from cell_mnn.metrics import compute_wasserstein, MMDLoss
+from cell_mnn.utils import save_hyperparams_to_json, fix_seed
 
 
 # Parse command-line arguments

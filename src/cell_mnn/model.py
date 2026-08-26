@@ -6,7 +6,7 @@ from einops import rearrange, reduce, repeat
 import matplotlib.pyplot as plt
 import wandb
 
-from lib.metrics import MMDLoss, compute_wasserstein
+from .metrics import MMDLoss, compute_wasserstein
 
 
 class MLP(torch.nn.Module):

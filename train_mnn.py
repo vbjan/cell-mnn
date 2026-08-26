@@ -1,6 +1,6 @@
-from lib.model import CellMNN
-from lib.utils import fix_seed, save_hyperparams_to_json
-from lib.data.data_loading import get_datasets
+from cell_mnn.model import CellMNN
+from cell_mnn.utils import fix_seed, save_hyperparams_to_json
+from cell_mnn.data.data_loading import get_datasets
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pytorch_lightning as pl

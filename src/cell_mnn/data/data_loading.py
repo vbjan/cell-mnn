@@ -1,14 +1,11 @@
 import torch
 from torch.utils.data import Dataset
-import scanpy as sc
 import numpy as np
 
-import numpy as np
-import torch
 from torch.utils.data import IterableDataset
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from einops import rearrange, repeat
-from lib.data.data_preprocessing import get_data
+from .data_preprocessing import get_data
 
 class FlowMatchingDataset(IterableDataset):
     """
