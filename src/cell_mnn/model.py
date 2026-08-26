@@ -216,20 +216,8 @@ class CellMNN(pl.LightningModule):
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
     def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues"):
-        """
-        Log the eigenvalues of the predicted matrix **A** to Weights‑and‑Biases.
-
-        Parameters
-        ----------
-        A   : torch.Tensor
-              Shape (B, 1, D, D) or (B, D, D); the matrix (or batch of matrices)
-              returned by the MLP inside `forward`.
-        tag : str
-              Base key under which histograms are stored in wandb.
-        """
         if not isinstance(self.logger, WandbLogger):
             return
-
         import wandb
 
         with torch.no_grad():
