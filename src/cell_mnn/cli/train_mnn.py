@@ -81,13 +81,13 @@ def main(argv=None):
     dataloader = DataLoader(train_dataset, batch_size=None)
     val_loader = DataLoader(val_dataset, batch_size=None)
 
-    model_name = f"mnn_{args.ds_name}_{timestamp}_skip_day{train_dataset.skip_day}_{uid}"
+    model_name = f"mnn_{args.ds_name}_{timestamp}_t_skip{train_dataset.t_skip}_{uid}"
 
     model = CellMNN(
         latent_dim=latent_dim,
         lr=args.lr,
         days_w_data=train_dataset.days,
-        skip_day=train_dataset.skip_day,
+        t_skip=train_dataset.t_skip,
         prev_day=train_dataset.prev_day,
         log_every_n_epochs=3,
         n_trajectories=3,
@@ -120,7 +120,7 @@ def main(argv=None):
 
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor=f'val_emd(skip_day={train_dataset.skip_day})',
+        monitor=f'val_emd(t_skip={train_dataset.t_skip})',
         min_delta=0.00,
         patience=args.patience,
         verbose=True,
@@ -130,7 +130,7 @@ def main(argv=None):
 
     # Create model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor=f'val_emd(skip_day={train_dataset.skip_day})',
+        monitor=f'val_emd(t_skip={train_dataset.t_skip})',
         dirpath=f'weights/mnn/{model_name}/',
         filename=f'best-model',
         save_top_k=1,

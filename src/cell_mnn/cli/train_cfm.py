@@ -80,7 +80,7 @@ class FlowMatchingModel(pl.LightningModule):
         # index of day to skip for evaluation [0, last_day_idx]
         self.skip_day_idx = skip_day_idx
         self.days = days
-        self.skip_day = days[skip_day_idx]
+        self.t_skip = days[skip_day_idx]
         self.prev_day = days[skip_day_idx - 1]
 
         self.lr = lr
@@ -106,8 +106,8 @@ class FlowMatchingModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
-        t, x_prev_day, x_skip_day, _ = batch
-        t_span = torch.arange(self.prev_day, self.skip_day + self.dt, self.dt)
+        t, x_prev_day, x_t_skip, _ = batch
+        t_span = torch.arange(self.prev_day, self.t_skip + self.dt, self.dt)
         traj = self.node.trajectory(
             x_prev_day,
             t_span=t_span,
@@ -115,14 +115,14 @@ class FlowMatchingModel(pl.LightningModule):
         # get predicted distribution at the last timepoint
         pred_dist = traj[-1, :, :]
 
-        mmd = self.mmd_loss(pred_dist, x_skip_day)
-        self.log(f"val_mmd(skip_day={self.skip_day})", mmd.cpu().item())
+        mmd = self.mmd_loss(pred_dist, x_t_skip)
+        self.log(f"val_mmd(t_skip={self.t_skip})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
-            x_skip_day.cpu().numpy(),
+            x_t_skip.cpu().numpy(),
             num_iter_max=num_iter_max)
-        self.log(f"val_emd(skip_day={self.skip_day})", emd)
+        self.log(f"val_emd(t_skip={self.t_skip})", emd)
 
         return emd
 
@@ -195,7 +195,7 @@ def main(argv=None):
 
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor=f'val_emd(skip_day={train_dataset.days[args.skip_day_idx]})',
+        monitor=f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})',
         min_delta=0.00,
         patience=args.patience,
         verbose=True,
@@ -205,7 +205,7 @@ def main(argv=None):
 
     # Create model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor=f'val_emd(skip_day={train_dataset.days[args.skip_day_idx]})',
+        monitor=f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})',
         dirpath=f'weights/checkpoints/{model_name}/',
         filename=f'best-model',
         save_top_k=1,
@@ -245,10 +245,10 @@ def main(argv=None):
         enable_checkpointing=False,
     )
     test_results = test_trainer.test(best_model, val_loader)
-    print(f"Test EMD: {test_results[0][f'val_emd(skip_day={train_dataset.days[args.skip_day_idx]})']:.4f}")
+    print(f"Test EMD: {test_results[0][f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})']:.4f}")
 
     # Log the final test EMD to wandb
-    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(skip_day={train_dataset.days[args.skip_day_idx]})']
+    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})']
 
     # Save hyperparameters as a JSON file
     hyperparams_path = os.path.join(

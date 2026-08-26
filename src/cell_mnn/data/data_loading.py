@@ -40,8 +40,8 @@ class FlowMatchingDataset(IterableDataset):
         self.n_days = len(X)
         self.days = days
         self.skip_day_idx = skip_day_idx
-        self.skip_day = days[skip_day_idx]
-        self.prev_day = days[skip_day_idx - 1] 
+        self.t_skip = days[skip_day_idx]
+        self.prev_day = days[skip_day_idx - 1]
         self.train_on_skip_day = train_on_skip_day
         self.latent_dim = X[0].shape[-1]
         assert 1 <= self.skip_day_idx <= self.n_days - \
@@ -250,16 +250,16 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         assert 0 < skip_day_idx < self.n_times - \
             1, f"skip_day_idx {skip_day_idx} must be in [1, n_times-1)"
         self.skip_day_idx = skip_day_idx
-        self.skip_day = days[self.skip_day_idx]
+        self.t_skip = days[self.skip_day_idx]
         self.batch_size = batch_size
 
-        # Predict distribution at skip_day from previous day
+        # Predict distribution at t_skip from previous day
         self.prev_day_idx = prev_day_idx if prev_day_idx is not None else skip_day_idx - 1
         self.prev_day = days[self.prev_day_idx] if self.prev_day_idx is not None else days[self.skip_day_idx - 1]
 
-        assert self.prev_day <= self.skip_day, f"skip_day {self.skip_day} must be less than or equal to prev_day {self.prev_day}"
+        assert self.prev_day <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to prev_day {self.prev_day}"
         self.X_prev_day = X[self.prev_day_idx]
-        self.X_skip_day = X[self.skip_day_idx]
+        self.X_t_skip = X[self.skip_day_idx]
         self.X_next_avail_day = X[self.skip_day_idx + 1]
 
         self.device = device
@@ -268,25 +268,25 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         while True:
             if self.batch_size is None:
                 indices_prev = np.arange(self.X_prev_day.shape[0])
-                indices_skip = np.arange(self.X_skip_day.shape[0])
+                indices_t_skip = np.arange(self.X_t_skip.shape[0])
                 indices_next_avail = np.arange(self.X_next_avail_day.shape[0])
             else:
                 # Batched behavior: sample random indices
                 indices_prev = np.random.randint(0, self.X_prev_day.shape[0], size=self.batch_size)
-                indices_skip = np.random.randint(0, self.X_skip_day.shape[0], size=self.batch_size)
+                indices_t_skip = np.random.randint(0, self.X_t_skip.shape[0], size=self.batch_size)
                 indices_next_avail = np.random.randint(0, self.X_next_avail_day.shape[0], size=self.batch_size)
-                
+
             x_prev_day = torch.from_numpy(
                 self.X_prev_day[indices_prev]).float().to(self.device)
-            x_skip_day = torch.from_numpy(
-                self.X_skip_day[indices_skip]).float().to(self.device)
+            x_t_skip = torch.from_numpy(
+                self.X_t_skip[indices_t_skip]).float().to(self.device)
             x_next_avail_day = torch.from_numpy(
                 self.X_next_avail_day[indices_next_avail]).float().to(self.device)
 
             t = torch.full((x_prev_day.shape[0],), float(
                 self.prev_day), device=self.device)
 
-            yield (t, x_prev_day, x_skip_day, x_next_avail_day)
+            yield (t, x_prev_day, x_t_skip, x_next_avail_day)
 
     def __len__(self):
         if self.batch_size is None:
@@ -320,7 +320,7 @@ class MnnDataset(IterableDataset):
         self.skip_day_idx = skip_day_idx
         assert 0 < skip_day_idx < n_days - \
             1, "skip_day_idx must be in [1, n_days-1)"
-        self.skip_day = days[skip_day_idx]
+        self.t_skip = days[skip_day_idx]
 
         # Filter out the day we want to skip
         if self.train_on_skip_day:
@@ -427,7 +427,7 @@ class MixedDataset(MnnDataset):
         self.datasets = datasets
         self.dataset_iterators = [iter(dataset) for dataset in datasets]
         self.latent_dim = datasets[0].latent_dim
-        self.skip_day = datasets[0].skip_day
+        self.t_skip = datasets[0].t_skip
         self.prev_day = datasets[0].prev_day
         self.days = [day for dataset in datasets for day in dataset.days]
         self.days = sorted(list(set(self.days)))  # Remove duplicates and sort

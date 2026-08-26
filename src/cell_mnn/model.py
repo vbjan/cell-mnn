@@ -51,7 +51,7 @@ class CellMNN(pl.LightningModule):
         latent_dim: int,
         lr: float,
         days_w_data: list[int],
-        skip_day: int,
+        t_skip: int,
         prev_day: int | None = None,
         log_every_n_epochs: int = 10,
         n_trajectories: int = 3,
@@ -96,13 +96,15 @@ class CellMNN(pl.LightningModule):
         self.days_w_data = days_w_data
         self.min_t = self.days_w_data[0]
         self.max_t = self.days_w_data[-1] + self.dt
-        self.skip_day = skip_day
-        self.prev_day = prev_day or skip_day - 1
+        # TODO can we drop this here and pass t_val as a input in validation step function?
+        self.t_skip = t_skip
+        # TODO Drop this?
+        self.prev_day = prev_day or t_skip - 1
         # Number of time steps at which to sample the trajectory
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
 
-        # If False, train on all time points except skip_day
+        # If False, train on all time points except t_skip
         self.train_on_skip_day = train_on_skip_day
 
     def configure_optimizers(self):
@@ -216,7 +218,7 @@ class CellMNN(pl.LightningModule):
         B, n_days, D = x_population.shape
 
         # Decode directly at the days present in the batch (t_population
-        # already excludes skip_day unless train_on_skip_day is set)
+        # already excludes t_skip unless train_on_skip_day is set)
         x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, t_population)
 
         # Create mask to exclude only the initial condition day
@@ -258,34 +260,30 @@ class CellMNN(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
         # (I, D)
-        t, x_prev_day, x_skip_day, x_next_avail_day = batch
-        skip_day_idx = int((self.skip_day - self.min_t) / self.dt)
-        next_avail_day_idx = int((self.skip_day + 1 - self.min_t) / self.dt)
+        t, x_prev_day, x_t_skip, x_next_avail_day = batch
 
         x_prev_day = rearrange(x_prev_day, 'i d -> i 1 d')
         t = rearrange(t, 'i -> i 1 1')
+        # TODO are we able to drop prev_day?? Validate somwehow else?
         assert torch.isclose(t, torch.tensor(self.prev_day).float(
         ), atol=1e-3).all(), "t is not equal to skip_day"
-        decode_t_range = torch.arange(
-            self.min_t, self.max_t, self.dt, device=x_prev_day.device)
-        decode_t_range = repeat(
-            decode_t_range, 't -> b t 1', b=x_prev_day.shape[0])
+        decode_t = torch.full_like(t, self.t_skip)
 
-        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_prev_day, t, decode_t_range)
-        pred_dist = x_traj[:, skip_day_idx, :].detach()
+        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_prev_day, t, decode_t)
+        pred_dist = x_traj[:, 0, :].detach()
 
         A = P_inv @ torch.diag_embed(eigenvals) @ P
         self.log_A_eigenvalues(A)
 
-        mmd = self.loss_fn(pred_dist, x_skip_day)
-        self.log(f"val_mmd(skip_day={self.skip_day})", mmd.cpu().item())
+        mmd = self.loss_fn(pred_dist, x_t_skip)
+        self.log(f"val_mmd(t_skip={self.t_skip})", mmd.cpu().item())
 
         emd = compute_wasserstein(
-            pred_dist.cpu().numpy(), 
-            x_skip_day.cpu().numpy(),
+            pred_dist.cpu().numpy(),
+            x_t_skip.cpu().numpy(),
             num_iter_max=num_iter_max
         )
-        self.log(f"val_emd(skip_day={self.skip_day})", emd)
+        self.log(f"val_emd(t_skip={self.t_skip})", emd)
         return emd
     
     def test_step(self, batch, batch_idx):
