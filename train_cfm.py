@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import argparse
-from torchcfm.models import MLP
 
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
@@ -46,10 +45,36 @@ def parse_args():
                         help='Batch size for training')
     return parser.parse_args()
 
+
+class CFMVelocityMLP(torch.nn.Module):
+    """Time-conditioned velocity field for the CFM baselines.
+
+    Matches torchcfm.models.MLP(time_varying=True) exactly (3 hidden
+    layers of width `w`, SELU activations) so the baseline stays
+    unchanged; inlined here to avoid depending on torchcfm just for a
+    generic MLP.
+    """
+
+    def __init__(self, dim, out_dim=None, w=64, time_varying=False):
+        super().__init__()
+        self.time_varying = time_varying
+        if out_dim is None:
+            out_dim = dim
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(dim + (1 if time_varying else 0), w), torch.nn.SELU(),
+            torch.nn.Linear(w, w), torch.nn.SELU(),
+            torch.nn.Linear(w, w), torch.nn.SELU(),
+            torch.nn.Linear(w, out_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class FlowMatchingModel(pl.LightningModule):
     def __init__(self, dim, skip_day_idx, days, lr, w=64):
         super().__init__()
-        self.ot_cfm_model = MLP(dim=dim, time_varying=True, w=64)
+        self.ot_cfm_model = CFMVelocityMLP(dim=dim, time_varying=True, w=64)
         self.node = NeuralODE(torch_wrapper(
             self.ot_cfm_model), solver="rk4", sensitivity="adjoint")
         # index of day to skip for evaluation [0, last_day_idx]
