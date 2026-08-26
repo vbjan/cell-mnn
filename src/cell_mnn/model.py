@@ -152,9 +152,10 @@ class CellMNN(pl.LightningModule):
         A: torch.Tensor,  # (B, 1, D, D)
         x_t: torch.Tensor,  # (B, 1, D)
         t: torch.Tensor,  # (B, 1, 1)
-        t_population: torch.Tensor  # (B, T, 1)
+        t_population: torch.Tensor,  # (B, T, 1)
+        x_dot_traj: torch.Tensor  # (B, T, D), already decoded at t_population
     ) -> torch.Tensor:  # (B, T * kinetic_grid_multiplier, D)
-        """Re-decode dx/dt on a denser time grid for the kinetic energy regularizer."""
+        """Augment dx/dt with extra random timepoints for the kinetic energy regularizer."""
         B, T, _ = t_population.shape
         num_extra = T * (self.kinetic_grid_multiplier - 1)
 
@@ -163,10 +164,10 @@ class CellMNN(pl.LightningModule):
         extra_ts = t_min + (t_max - t_min) * torch.rand(
             B, num_extra, 1, device=t_population.device, dtype=t_population.dtype)
 
-        dense_ts = torch.cat([t_population, extra_ts], dim=1)
+        extra_system_traj = self.decode_trajectory(A, x_t, t, extra_ts)  # (B, num_extra, D, 2)
+        extra_x_dot_traj = extra_system_traj.select(dim=-1, index=1)
 
-        dense_system_traj = self.decode_trajectory(A, x_t, t, dense_ts)  # (B, T', D, 2)
-        return dense_system_traj.select(dim=-1, index=1)
+        return torch.cat([x_dot_traj, extra_x_dot_traj], dim=1)
 
     def training_step(
         self,
@@ -202,7 +203,7 @@ class CellMNN(pl.LightningModule):
                     ) * self.gamma ** i
 
         if self.kinetic_grid_multiplier > 1:
-            kinetic_x_dot_traj = self._decode_dense_kinetic_grid(A, x_t, t, t_population)
+            kinetic_x_dot_traj = self._decode_dense_kinetic_grid(A, x_t, t, t_population, x_dot_traj)
         else:
             kinetic_x_dot_traj = x_dot_traj
         kinetic_loss = kinetic_x_dot_traj.square().mean()
