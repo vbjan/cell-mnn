@@ -96,11 +96,9 @@ class CellMNN(pl.LightningModule):
         self.days_w_data = days_w_data
         self.min_t = self.days_w_data[0]
         self.max_t = self.days_w_data[-1] + self.dt
-        self.max_data_t = self.days_w_data[-1]
         self.skip_day = skip_day
         self.prev_day = prev_day or skip_day - 1
         # Number of time steps at which to sample the trajectory
-        self.traj_len = int((self.max_t - self.min_t) / self.dt)
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
 
@@ -217,28 +215,9 @@ class CellMNN(pl.LightningModule):
         x_t, t, x_population, t_population = batch
         B, n_days, D = x_population.shape
 
-        # Create time grid
-        decode_t_range_1d = torch.arange(
-            self.min_t, self.max_t, self.dt, device=x_t.device)
-        decode_t_range = repeat(decode_t_range_1d, 't -> b t 1', b=B)
-
-        # Compute train mask on time grid to select out time points with supervision data
-        days_tensor = torch.tensor(
-            self.days_w_data, device=x_t.device, dtype=torch.float32)
-        times_expanded = decode_t_range_1d.unsqueeze(1)  # [T, 1]
-        days_expanded = days_tensor.unsqueeze(0)
-        is_close = torch.isclose(
-            times_expanded, days_expanded, atol=1e-3)  # [T, D]
-        train_mask = is_close.any(dim=1)
-
-        if not self.train_on_skip_day:
-            train_mask = torch.logical_and(train_mask, torch.abs(
-                decode_t_range_1d - self.skip_day) >= 1e-3)
-
-        # Predict trajectory at time steps
-        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, decode_t_range)
-
-        x_traj_subsampled = x_traj[:, train_mask, :]  # (I, T, D)
+        # Decode directly at the days present in the batch (t_population
+        # already excludes skip_day unless train_on_skip_day is set)
+        x_traj, P_inv, eigenvals, P, x_dot_traj = self.forward(x_t, t, t_population)
 
         # Create mask to exclude only the initial condition day
         valid_mask_raw = (t_population.squeeze(-1) > t.squeeze(-1))
@@ -256,7 +235,7 @@ class CellMNN(pl.LightningModule):
                 m = valid_mask[:, d]
                 if m.any():
                     mmd_loss_future += self.loss_fn(
-                        x_traj_subsampled[m, d, :],   # (N_d , D)
+                        x_traj[m, d, :],   # (N_d , D)
                         x_population[m, d, :]
                     ) * self.gamma ** i
 
@@ -296,15 +275,6 @@ class CellMNN(pl.LightningModule):
         pred_dist = x_traj[:, skip_day_idx, :].detach()
 
         A = P_inv @ torch.diag_embed(eigenvals) @ P
-        noise_var_traj = self.compute_uncertainty(A, t, decode_t_range)
-
-        self.log_trajectories(
-            x_traj,
-            noise_var_traj,
-            decode_t_range,
-            x_prev_day,
-            t
-        )
         self.log_A_eigenvalues(A)
 
         mmd = self.loss_fn(pred_dist, x_skip_day)
@@ -320,89 +290,6 @@ class CellMNN(pl.LightningModule):
     
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
-
-    def log_trajectories(self, x_traj, noise_var_traj, t_range, x_prev_day, t):
-        # Only log trajectories every log_every_n_epochs
-        if self.current_epoch % self.log_every_n_epochs != 0:
-            return
-
-        # Select n_trajectories to visualize (or all if fewer are available)
-        batch_size = x_traj.shape[0]
-        n_to_visualize = min(self.n_trajectories, batch_size)
-
-        # If we want multiple trajectories, select indices evenly distributed across the batch
-        if n_to_visualize > 1:
-            step = max(1, batch_size // n_to_visualize)
-            indices = [i * step for i in range(n_to_visualize)]
-        else:
-            indices = [0]  # Just use the first trajectory
-
-        indices = torch.tensor(indices, dtype=torch.long, device=x_traj.device)
-
-        # Create a figure with n_trajectories subplots
-        fig, axes = plt.subplots(n_to_visualize, 1, figsize=(
-            10, 4 * n_to_visualize), squeeze=False)
-
-        # Plot all PC dimensions over time for each selected trajectory
-        latent_dim = x_traj.shape[2]
-        colors = plt.cm.tab10(np.linspace(0, 1, latent_dim))
-
-        for i, idx in enumerate(indices):
-            ax = axes[i, 0]
-
-            # Get data for this trajectory
-            x_traj_np = x_traj[idx].detach().cpu().numpy()
-            t_range_np = t_range[idx].detach().cpu().numpy()
-            x_prev_day_np = x_prev_day[idx].detach().cpu().numpy()
-            t_np = t[idx].detach().cpu().numpy()
-
-            # Reshape trajectory data for plotting
-            t_flat = t_range_np.squeeze()
-
-            # Plot each dimension separately
-            for dim in range(latent_dim):
-                # Extract diagonal variance for confidence interval
-                noise_var_diag = noise_var_traj[idx,
-                                                :, dim, dim].detach().cpu().numpy()
-                std_dev = np.sqrt(noise_var_diag)
-
-                # Plot mean trajectory
-                ax.plot(t_flat, x_traj_np[:, dim],
-                        label=f'PC{dim+1}', color=colors[dim], linewidth=2)
-
-                # Add shaded confidence interval (±2 std dev ≈ 95% confidence)
-                ax.fill_between(t_flat,
-                                x_traj_np[:, dim] - 2*std_dev,
-                                x_traj_np[:, dim] + 2*std_dev,
-                                color=colors[dim], alpha=0.2)
-
-                # Mark the initial value with a star
-                ax.scatter(t_np[0, 0], x_prev_day_np[0, dim],
-                           marker='*', s=150, color=colors[dim], edgecolor='black', zorder=10)
-
-            # Add reference line for skip day
-            if hasattr(self, 'skip_day'):
-                ax.axvline(x=self.skip_day, color='gray', linestyle='--', alpha=0.7,
-                           label=f'Skip Day ({self.skip_day})')
-
-            # Add labels
-            ax.set_xlabel('Time', fontsize=12)
-            ax.set_ylabel('PC Values', fontsize=12)
-            ax.set_title(f'Trajectory {i+1} in PCA Space', fontsize=14)
-
-            # Only show legend in the first plot to save space if multiple trajectories
-            if i == 0 or n_to_visualize <= 2:
-                ax.legend(loc='best')
-            ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-
-        # Log to wandb
-        self.logger.experiment.log({
-            "trajectory_visualization": wandb.Image(fig),
-            "epoch": self.current_epoch
-        })
-        plt.close(fig)
 
     def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues"):
         """
