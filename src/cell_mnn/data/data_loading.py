@@ -23,6 +23,10 @@ def sample_cells(X, n, device):
     return to_tensor(X[np.random.randint(0, X.shape[0], size=n)], device)
 
 
+def assert_valid_skip_idx(skip_idx, n_times):
+    assert 1 <= skip_idx <= n_times - 1, "skip_idx must be in [1, n_times - 1]"
+
+
 class TimeFilteredDataset(IterableDataset):
     """
     User gives skip_idx, which is the index of the timepoint to skip.
@@ -50,8 +54,7 @@ class TimeFilteredDataset(IterableDataset):
         self.t_skip = t_grid[skip_idx]
         self.train_on_skip = train_on_skip
         self.latent_dim = X[0].shape[-1]
-        assert 1 <= self.skip_idx <= self.n_times - \
-            1, "skip_idx must be in [1, n_times - 1]"
+        assert_valid_skip_idx(self.skip_idx, self.n_times)
 
         # Filter out the timepoint we want to skip
         if self.train_on_skip:
@@ -181,8 +184,7 @@ class SkipMarginalEvalDataset(IterableDataset):
         self.n_times = len(X)
 
         self.skip_idx = skip_idx
-        assert 1 <= self.skip_idx <= self.n_times - \
-            1, "skip_idx must be in [1, n_times - 1]"
+        assert_valid_skip_idx(self.skip_idx, self.n_times)
         self.t_skip = t_grid[self.skip_idx]
         self.batch_size = batch_size
 
