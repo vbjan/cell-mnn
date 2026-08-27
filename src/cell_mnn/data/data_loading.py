@@ -78,7 +78,7 @@ class FlowMatchingDataset(TimeFilteredDataset):
     train dataset in this module takes the same constructor keywords.
     """
 
-    flow_matcher_cls = None
+    flow_matcher_cls: type[ConditionalFlowMatcher] | None = None
 
     def __init__(self, *args, sigma=0.1, **kwargs):
         super().__init__(*args, **kwargs)
@@ -112,9 +112,10 @@ class FlowMatchingDataset(TimeFilteredDataset):
                 #   t   \in [0,1]
                 #   x_t = (1-t)*x0 + t*x1 + noise
                 #   u_t = x1 - x0  (by default, total displacement)
+                # [:3] drops the 4th element torchcfm only returns for return_noise=True
                 t, x_t, u_t = self.flow_matcher.sample_location_and_conditional_flow(
                     x0_sample, x1_sample
-                )
+                )[:3]
 
                 # 1) Scale t to the correct time interval [t_i, t_j].
                 T = t_i + delta_t * t
@@ -182,7 +183,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             # This computes the OT problem for all points, not just a batch
             all_t, all_x_t, all_u_t = self.flow_matcher.sample_location_and_conditional_flow(
                 x0_tensor, x1_tensor
-            )
+            )[:3]
 
             # Scale t and u_t as in the original code
             all_T = t_i + delta_t * all_t
