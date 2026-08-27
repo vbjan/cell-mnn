@@ -22,9 +22,8 @@ class FlowMatchingDataset(IterableDataset):
             flow_matcher, 
             batch_size, 
             device, 
-            skip_day_idx, 
-            days, 
-            seed=None,
+            skip_day_idx,
+            days,
             train_on_skip_day=False
         ):
         """
@@ -33,7 +32,6 @@ class FlowMatchingDataset(IterableDataset):
             batch_size (int): How many points to sample per pair of days
             device (torch.device): Where to put data (CPU or CUDA)
             skip_day (int): Which day index to skip entirely
-            seed (int): Optional seed for reproducibility
         """
         super().__init__()
 
@@ -303,9 +301,6 @@ class MnnDataset(IterableDataset):
         - days_filtered: list of days corresponding to the acquisition days of each component of X_filtered (no skip_day)
         """
         super().__init__()
-        # Settings
-        self.one_day_in_batch = False
-
         self.train_on_skip_day = train_on_skip_day
         n_days = len(X)
         self.latent_dim = X[0].shape[-1]
@@ -338,10 +333,7 @@ class MnnDataset(IterableDataset):
 
     def __iter__(self):
         while True:
-            if self.one_day_in_batch:
-                x_t, t = self._sample_batch_from_one_day()
-            else:
-                x_t, t = self._sample_batch_from_all_days()
+            x_t, t = self._sample_batch_from_all_days()
 
             x_population, t_population = self._sample_population()
 
@@ -352,17 +344,6 @@ class MnnDataset(IterableDataset):
             x_population = x_population[perm]
             t_population = t_population[perm]
             yield x_t, t, x_population, t_population
-
-    def _sample_batch_from_one_day(self):
-        i = np.random.randint(0, self.last_sample_day_idx + 1)
-        cell_indices = np.random.randint(
-            0, self.cells_per_day[i], size=self.batch_size)
-        x_t = torch.from_numpy(
-            self.X_filtered[i][cell_indices]
-        ).float().to(self.device).unsqueeze(1)  # Add time dimension
-        t = torch.full((self.batch_size, 1, 1), float(self.days_filtered[i]),
-                       device=self.device)
-        return x_t, t
 
     def _sample_batch_from_all_days(self):
         per_day_samples = self.batch_size // (self.last_sample_day_idx + 1)
