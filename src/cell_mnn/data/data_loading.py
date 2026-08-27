@@ -250,9 +250,9 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         super().__init__()
         self.n_times = len(X)
 
+        self.skip_day_idx = skip_day_idx
         assert 1 <= self.skip_day_idx <= self.n_times - \
             1, "skip_day_idx must be in [1, n_days - 1]"
-        self.skip_day_idx = skip_day_idx
         self.t_skip = days[self.skip_day_idx]
         self.batch_size = batch_size
 
