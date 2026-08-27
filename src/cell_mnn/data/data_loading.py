@@ -14,14 +14,6 @@ def split_evenly(total: int, n: int) -> list[int]:
 
 
 class FlowMatchingDataset(IterableDataset):
-    """
-    An IterableDataset that, on each iteration, samples from all
-    consecutive *filtered* timepoints (skipping one day) and yields:
-      - xT the sampled points at fractional time T.
-      - T  in the real interval [day_i, day_j] (not just day_i + t).
-      - uT the *per-unit-time* velocity, i.e. (x1 - x0) / (day_j - day_i).
-    """
-
     def __init__(
             self, 
             X, 
@@ -32,13 +24,6 @@ class FlowMatchingDataset(IterableDataset):
             days,
             train_on_skip_day=False
         ):
-        """
-        Args:
-            sigma (float): Noise scale for ExactOptimalTransportConditionalFlowMatcher
-            batch_size (int): How many points to sample per pair of days
-            device (torch.device): Where to put data (CPU or CUDA)
-            skip_day (int): Which day index to skip entirely
-        """
         super().__init__()
 
         self.n_days = len(X)
@@ -70,14 +55,6 @@ class FlowMatchingDataset(IterableDataset):
         return int(sum(self.cells_per_day) / self.batch_size)
 
     def __iter__(self):
-        """
-        Yields:
-            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
-            T   (Tensor): shape [(num_pairs)*batch_size].
-                          Real time in [day_i, day_j], properly scaled.
-            uT  (Tensor): shape [(num_pairs)*batch_size, dim].
-                          Per-day velocity = (x1 - x0) / (day_j - day_i).
-        """
         while True:
             ts_list = []
             xts_list = []
@@ -152,15 +129,6 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
     """
 
     def __init__(self, *args, sigma=0.1, **kwargs):
-        """
-        Args:
-            X (list): List of numpy arrays, one per timepoint
-            batch_size (int): How many points to sample per pair of days
-            device (torch.device): Where to put data (CPU or CUDA)
-            skip_day (int): Which day index to skip entirely
-            sigma (float): Noise scale for ExactOptimalTransportConditionalFlowMatcher
-            seed (int): Optional seed for reproducibility
-        """
         # Initialize with a temporary flow_matcher that will be used for precomputation
         flow_matcher = ExactOptimalTransportConditionalFlowMatcher(sigma=sigma)
         super().__init__(flow_matcher=flow_matcher, *args, **kwargs)
@@ -213,14 +181,6 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             f"Precomputation completed for {len(self.precomputed_data)} consecutive timepoint pairs")
 
     def __iter__(self):
-        """
-        Yields:
-            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
-            T   (Tensor): shape [(num_pairs)*batch_size].
-                          Real time in [day_i, day_j], properly scaled.
-            uT  (Tensor): shape [(num_pairs)*batch_size, dim].
-                          Per-day velocity = (x1 - x0) / (day_j - day_i).
-        """
         while True:
             ts_list = []
             xts_list = []
