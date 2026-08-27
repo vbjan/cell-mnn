@@ -243,8 +243,8 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         super().__init__()
         self.n_times = len(X)
 
-        assert 0 < skip_day_idx < self.n_times - \
-            1, f"skip_day_idx {skip_day_idx} must be in [1, n_times-1)"
+        assert 1 <= self.skip_day_idx <= self.n_times - \
+            1, "skip_day_idx must be in [1, n_days - 1]"
         self.skip_day_idx = skip_day_idx
         self.t_skip = days[self.skip_day_idx]
         self.batch_size = batch_size
@@ -305,8 +305,8 @@ class MnnDataset(IterableDataset):
         self.days = days
 
         self.skip_day_idx = skip_day_idx
-        assert 0 < skip_day_idx < n_days - \
-            1, "skip_day_idx must be in [1, n_days-1)"
+        assert 1 <= self.skip_day_idx <= n_days - \
+            1, "skip_day_idx must be in [1, n_days - 1]"
         self.t_skip = days[skip_day_idx]
 
         # Filter out the day we want to skip
