@@ -39,7 +39,6 @@ class FlowMatchingDataset(IterableDataset):
         self.days = days
         self.skip_day_idx = skip_day_idx
         self.t_skip = days[skip_day_idx]
-        self.t_prev = days[skip_day_idx - 1]
         self.train_on_skip_day = train_on_skip_day
         self.latent_dim = X[0].shape[-1]
         assert 1 <= self.skip_day_idx <= self.n_days - \
@@ -304,7 +303,6 @@ class MnnDataset(IterableDataset):
         self.train_on_skip_day = train_on_skip_day
         n_days = len(X)
         self.latent_dim = X[0].shape[-1]
-        self.t_prev = days[skip_day_idx - 1]
         self.days = days
 
         self.skip_day_idx = skip_day_idx
@@ -404,7 +402,6 @@ class MixedDataset(MnnDataset):
         self.dataset_iterators = [iter(dataset) for dataset in datasets]
         self.latent_dim = datasets[0].latent_dim
         self.t_skip = datasets[0].t_skip
-        self.t_prev = datasets[0].t_prev
         self.days = [day for dataset in datasets for day in dataset.days]
         self.days = sorted(list(set(self.days)))  # Remove duplicates and sort
         self.device = datasets[0].device
