@@ -280,30 +280,28 @@ class MnnDataset(TimeFilteredDataset):
         return x_population, t_population
     
 
-class MixedDataset(MnnDataset):
+class MixedDataset(IterableDataset):
+    """
+    Switching between the per-dataset iterators for amortized training.
+    """
+
     def __init__(
-            self, 
+            self,
             datasets: list[MnnDataset]
         ):
+        super().__init__()
         self.datasets = datasets
-        self.dataset_iterators = [iter(dataset) for dataset in datasets]
         self.latent_dim = datasets[0].latent_dim
         self.t_skip = datasets[0].t_skip
-        self.t_grid = [t for dataset in datasets for t in dataset.t_grid]
-        self.t_grid = sorted(list(set(self.t_grid)))  # Remove duplicates and sort
         self.device = datasets[0].device
+        self.t_grid = sorted({t for dataset in datasets for t in dataset.t_grid})
 
     def __iter__(self):
+        # The child datasets are infinite iterators, so they never need resetting.
+        iterators = [iter(dataset) for dataset in self.datasets]
         while True:
-            for i, dataset_iter in enumerate(self.dataset_iterators):
-                try:
-                    batch = next(dataset_iter)
-                    yield batch
-                except StopIteration:
-                    # Reset the iterator for this dataset if it's exhausted
-                    self.dataset_iterators[i] = iter(self.datasets[i])
-                    batch = next(self.dataset_iterators[i])
-                    yield batch
+            for dataset_iter in iterators:
+                yield next(dataset_iter)
 
     def __len__(self):
         # Sum of all dataset lengths
