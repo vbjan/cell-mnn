@@ -179,7 +179,7 @@ class CellMNN(pl.LightningModule):
         B, T, D = x_population.shape
 
         # Decode directly at the timepoints present in the batch (t_population
-        # already excludes t_skip unless train_on_skip_day is set)
+        # already excludes t_skip unless train_on_skip is set)
         x_traj, x_dot_traj, A = self.forward(x_t, t, t_population)
 
         # Create mask to exclude only the initial condition timepoint

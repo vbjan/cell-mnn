@@ -20,8 +20,8 @@ def parse_args(argv=None):
         description='Train an MNN prediction model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Maximum number of epochs')
-    parser.add_argument('--skip_day_idx', type=int, default=1,
-                        help='Index of day to skip for evaluation')
+    parser.add_argument('--skip_idx', type=int, default=1,
+                        help='Index of timepoint to skip for evaluation')
     parser.add_argument('--debug', action='store_true',
                         help='Run in debug mode')
     parser.add_argument('--patience', type=int, default=10,
@@ -37,8 +37,8 @@ def parse_args(argv=None):
                         default=1e-5, help='Weight decay for optimizer')
     parser.add_argument('--batch_size', type=int,
                         default=200, help='Batch size')
-    parser.add_argument('--train_on_all_days', action='store_true',
-                        help='Train on all days in the dataset (training on validation data)')
+    parser.add_argument('--train_on_all_times', action='store_true',
+                        help='Train on all timepoints in the dataset (training on validation data)')
     parser.add_argument('--lambda_kinetic', type=float, default=0.1,
                         help='Weight factor for kinetic energy regularizer.')
     parser.add_argument('--gamma', type=float, default=0.1,
@@ -70,11 +70,11 @@ def main(argv=None):
     train_dataset, val_dataset = get_datasets(
         ds_name=args.ds_name,
         val_ds_name=args.val_ds_name,
-        skip_day_idx=args.skip_day_idx,
+        skip_idx=args.skip_idx,
         batch_size=args.batch_size,
         device=device,
         val_prop=0.0,
-        train_on_all_days=args.train_on_all_days,
+        train_on_all_times=args.train_on_all_times,
         method="mnn",
     )
     latent_dim = train_dataset.latent_dim
@@ -155,7 +155,7 @@ def main(argv=None):
         f'weights/mnn/{model_name}/', 'hyperparameters.json')
     save_hyperparams_to_json(wandb_logger, hp_path)
 
-    # Testing on the skip day
+    # Testing on the skipped timepoint
     checkpoint = torch.load(checkpoint_callback.best_model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['state_dict'])
     model.eval()

@@ -25,8 +25,8 @@ def parse_args(argv=None):
         description='Train a Flow Matching model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Maximum number of epochs')
-    parser.add_argument('--skip_day_idx', type=int, default=1,
-                        help='Day to skip for evaluation')
+    parser.add_argument('--skip_idx', type=int, default=1,
+                        help='Index of timepoint to skip for evaluation')
     parser.add_argument('--debug', action='store_true',
                         help='Run in debug mode')
     parser.add_argument('--patience', type=int, default=10,
@@ -72,16 +72,16 @@ class CFMVelocityMLP(torch.nn.Module):
 
 
 class FlowMatchingModel(pl.LightningModule):
-    def __init__(self, dim, skip_day_idx, days, lr, w=64):
+    def __init__(self, dim, skip_idx, t_grid, lr, w=64):
         super().__init__()
         self.ot_cfm_model = CFMVelocityMLP(dim=dim, time_varying=True, w=64)
         self.node = NeuralODE(torch_wrapper(
             self.ot_cfm_model), solver="rk4", sensitivity="adjoint")
-        # index of day to skip for evaluation [0, last_day_idx]
-        self.skip_day_idx = skip_day_idx
-        self.days = days
-        self.t_skip = days[skip_day_idx]
-        self.t_prev = days[skip_day_idx - 1]
+        # index of timepoint to skip for evaluation [0, n_times - 1]
+        self.skip_idx = skip_idx
+        self.t_grid = t_grid
+        self.t_skip = t_grid[skip_idx]
+        self.t_prev = t_grid[skip_idx - 1]
 
         self.lr = lr
         self.dt = 0.01
@@ -106,10 +106,10 @@ class FlowMatchingModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
-        x_prev_day, t, x_t_skip, _ = batch
+        x_t_prev, t, x_t_skip, _ = batch
         t_span = torch.arange(self.t_prev, self.t_skip + self.dt, self.dt)
         traj = self.node.trajectory(
-            x_prev_day,
+            x_t_prev,
             t_span=t_span,
         )
         # get predicted distribution at the last timepoint
@@ -153,8 +153,8 @@ def main(argv=None):
     train_dataset, val_dataset = get_datasets(
         ds_name=args.ds_name,
         val_ds_name=args.val_ds_name,
-        skip_day_idx=args.skip_day_idx,
-        train_on_all_days=False,
+        skip_idx=args.skip_idx,
+        train_on_all_times=False,
         method=args.method,
         device=device,
         batch_size=args.batch_size,
@@ -167,11 +167,11 @@ def main(argv=None):
 
     cfm_model = FlowMatchingModel(
         dim=latent_dim,
-        skip_day_idx=args.skip_day_idx,
+        skip_idx=args.skip_idx,
         lr=lr,
-        days=train_dataset.days,
+        t_grid=train_dataset.t_grid,
     ).to(device)
-    model_name = f"{args.method}_5-dim_pca_skip_day_idx{args.skip_day_idx}_{timestamp}"
+    model_name = f"{args.method}_5-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
 
     wandb_logger = WandbLogger(
         project=f"OT-CFM-{args.ds_name}->{args.val_ds_name}",
@@ -195,7 +195,7 @@ def main(argv=None):
 
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor=f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})',
+        monitor=f'val_emd(t_skip={cfm_model.t_skip})',
         min_delta=0.00,
         patience=args.patience,
         verbose=True,
@@ -205,7 +205,7 @@ def main(argv=None):
 
     # Create model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor=f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})',
+        monitor=f'val_emd(t_skip={cfm_model.t_skip})',
         dirpath=f'weights/checkpoints/{model_name}/',
         filename=f'best-model',
         save_top_k=1,
@@ -233,9 +233,9 @@ def main(argv=None):
     else:
         best_model = FlowMatchingModel.load_from_checkpoint(checkpoint_callback.best_model_path,
                                                             dim=latent_dim,
-                                                            skip_day_idx=args.skip_day_idx,
+                                                            skip_idx=args.skip_idx,
                                                             lr=1e-4,
-                                                            days=train_dataset.days)
+                                                            t_grid=train_dataset.t_grid)
 
     # Evaluate the best model on the test dataset
     print("\nEvaluating best model on test dataset...")
@@ -245,10 +245,10 @@ def main(argv=None):
         enable_checkpointing=False,
     )
     test_results = test_trainer.test(best_model, val_loader)
-    print(f"Test EMD: {test_results[0][f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})']:.4f}")
+    print(f"Test EMD: {test_results[0][f'val_emd(t_skip={cfm_model.t_skip})']:.4f}")
 
     # Log the final test EMD to wandb
-    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(t_skip={train_dataset.days[args.skip_day_idx]})']
+    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(t_skip={cfm_model.t_skip})']
 
     # Save hyperparameters as a JSON file
     hyperparams_path = os.path.join(

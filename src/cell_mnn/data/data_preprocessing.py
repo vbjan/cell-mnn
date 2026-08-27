@@ -25,29 +25,29 @@ def split_train_val_indices(n_cells, val_prop):
 def get_data(val_prop=0., ds_name="embryoid", pca_dims=5):
     if ds_name == "embryoid_less_preprocessed":
         adata = sc.read_h5ad('data/ebdata/ebdata_v3_recomputed_pca.h5ad')
-        days = range(len(adata.obs["sample_labels"].unique()))
+        t_grid = range(len(adata.obs["sample_labels"].unique()))
     elif ds_name == "embryoid":
         adata = np.load('data/ebdata/eb_velocity_v5.npz')
-        days = np.unique(adata["sample_labels"]) 
+        t_grid = np.unique(adata["sample_labels"]) 
     elif ds_name == "embryoid_inflated":
         adata = sc.read_h5ad('data/ebdata/eb_velocity_v5_inflated.h5ad')
-        days = adata.obs['sample_labels'].unique()
+        t_grid = adata.obs['sample_labels'].unique()
     elif ds_name == "cite":
         adata = sc.read_h5ad('data/citedata/op_cite_inputs_0.h5ad')
-        days = adata.obs['day'].unique()
+        t_grid = adata.obs['day'].unique()
     elif ds_name == "cite_inflated":
         adata = sc.read_h5ad('data/citedata/op_cite_inputs_0_inflated.h5ad')
-        days = adata.obs['day'].unique()
+        t_grid = adata.obs['day'].unique()
     elif ds_name == "multi":
         adata = sc.read_h5ad('data/multidata/op_train_multi_targets_0.h5ad')
-        days = adata.obs['day'].unique()
+        t_grid = adata.obs['day'].unique()
     elif ds_name == "multi_inflated":
         adata = sc.read_h5ad('data/multidata/op_train_multi_targets_0_inflated.h5ad')
-        days = adata.obs['day'].unique()
+        t_grid = adata.obs['day'].unique()
     else:
         raise ValueError(f"Dataset {ds_name} not recognized.")
     
-    days = sorted(days)
+    t_grid = sorted(t_grid)
 
     if isinstance(adata, np.lib.npyio.NpzFile):
         X_pca = adata["pcs"]
@@ -67,7 +67,7 @@ def get_data(val_prop=0., ds_name="embryoid", pca_dims=5):
     t_train, t_val = [], []
     idx_train, idx_val = [], []
 
-    for t in days:
+    for t in t_grid:
         if ds_name == "embryoid_less_preprocessed":  # selection logic needs to be dataset-specific due to different naming
             mask_t = adata.obs["sample_labels"].cat.codes == t
         elif ds_name in ["cite", "multi", "synthetic", "cite_inflated", "multi_inflated"]:
