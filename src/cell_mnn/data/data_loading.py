@@ -1,10 +1,9 @@
 import torch
-from torch.utils.data import Dataset
 import numpy as np
 
 from torch.utils.data import IterableDataset
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
-from einops import rearrange, repeat
+from einops import repeat
 from .data_preprocessing import get_data
 
 class FlowMatchingDataset(IterableDataset):
@@ -240,7 +239,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 
 
 class EmbryoidFlowMatchingTestDataset(IterableDataset):
-    def __init__(self, X, days, device, skip_day_idx, batch_size=None, prev_day_idx=None):
+    def __init__(self, X, days, device, skip_day_idx, batch_size=None):
         super().__init__()
         self.n_times = len(X)
 
@@ -251,8 +250,8 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
         self.batch_size = batch_size
 
         # Predict distribution at t_skip from previous day
-        self.prev_day_idx = prev_day_idx if prev_day_idx is not None else skip_day_idx - 1
-        self.t_prev = days[self.prev_day_idx] if self.prev_day_idx is not None else days[self.skip_day_idx - 1]
+        self.prev_day_idx = skip_day_idx - 1
+        self.t_prev = days[self.prev_day_idx]
 
         assert self.t_prev <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to t_prev {self.t_prev}"
         self.X_prev_day = X[self.prev_day_idx]
@@ -351,7 +350,6 @@ class MnnDataset(IterableDataset):
         # Create x_population with samples from all time points
         x_ts = []
         t = []
-        x_population = []
         for i in range(len(self.day_indices)):
             # Sample points from each time point for initial condition
             is_valid_train_input = (i <= self.last_sample_day_idx)
@@ -465,8 +463,7 @@ def construct_train_val_datasets(
         days=days,
         device=device,
         skip_day_idx=skip_day_idx,
-        prev_day_idx=skip_day_idx - 1,
-        batch_size=batch_size if too_big else None, 
+        batch_size=batch_size if too_big else None,
     )
     return train_dataset, val_dataset
 
