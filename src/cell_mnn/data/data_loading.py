@@ -222,17 +222,6 @@ class SkipMarginalEvalDataset(IterableDataset):
 
 
 class MnnDataset(TimeFilteredDataset):
-    def __init__(self, X, t_grid, batch_size, skip_idx, device, train_on_skip=False):
-        super().__init__(
-            X=X,
-            t_grid=t_grid,
-            batch_size=batch_size,
-            device=device,
-            skip_idx=skip_idx,
-            train_on_skip=train_on_skip,
-        )
-        self.last_sample_idx = len(self.t_indcs) - 2
-
     def __iter__(self):
         while True:
             # Rows are grouped by the initial condition's timepoint. The loss sums over
@@ -244,7 +233,7 @@ class MnnDataset(TimeFilteredDataset):
     def _sample_batch_from_all_times(self):
         # The final timepoint cannot serve as an initial condition: no later marginal
         # is left to supervise its trajectory.
-        num_source_times = self.last_sample_idx + 1
+        num_source_times = len(self.t_indcs) - 1
         num_samples = split_evenly(self.batch_size, num_source_times)
 
         x_ts = []
