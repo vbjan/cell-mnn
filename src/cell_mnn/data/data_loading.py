@@ -86,54 +86,44 @@ class FlowMatchingDataset(TimeFilteredDataset):
             f"{type(self).__name__} must set flow_matcher_cls"
         self.flow_matcher = self.flow_matcher_cls(sigma=sigma)
 
+    def _pair(self, i):
+        # Consecutive pair in the *filtered* grid: if skip_idx=3, t_indcs might be
+        # [0,1,2,4,5], so the pairs are (0->1), (1->2), (2->4), (4->5).
+        t_i = self.t_grid_filtered[i]      # e.g. 2
+        t_j = self.t_grid_filtered[i + 1]  # e.g. 4
+        return self.X_filtered[i], self.X_filtered[i + 1], t_i, t_j - t_i
+
+    def _flow_sample(self, x0, x1, t_i, delta_t):
+        # Flow-matching step returns:
+        #   t   \in [0,1]
+        #   x_t = (1-t)*x0 + t*x1 + noise
+        #   u_t = x1 - x0  (by default, total displacement)
+        # [:3] drops the 4th element torchcfm only returns for return_noise=True
+        t, x_t, u_t = self.flow_matcher.sample_location_and_conditional_flow(
+            x0, x1
+        )[:3]
+
+        # 1) Scale t to the correct time interval [t_i, t_j].
+        # 2) Convert total displacement into per-unit-time velocity:
+        #    if delta_t=2, then velocity = (x1 - x0) / 2
+        return x_t, t_i + delta_t * t, u_t / delta_t
+
+    def _sample_pair(self, i):
+        """One (x_t, T, u_t) batch for the i-th consecutive pair of marginals."""
+        x0, x1, t_i, delta_t = self._pair(i)
+        return self._flow_sample(
+            sample_cells(x0, self.batch_size, self.device),
+            sample_cells(x1, self.batch_size, self.device),
+            t_i,
+            delta_t,
+        )
+
     def __iter__(self):
+        n_pairs = len(self.X_filtered) - 1
         while True:
-            ts_list = []
-            xts_list = []
-            uts_list = []
-
-            # Go over consecutive pairs in the filtered list
-            # e.g. if skip_idx=3, t_indcs might be [0,1,2,4,5],
-            # so pairs are (0->1), (1->2), (2->4), (4->5).
-            for i in range(len(self.X_filtered) - 1):
-                x0 = self.X_filtered[i]
-                x1 = self.X_filtered[i + 1]
-
-                # Original integer time labels
-                t_i = self.t_grid_filtered[i]      # e.g. 2
-                t_j = self.t_grid_filtered[i + 1]  # e.g. 4
-                delta_t = t_j - t_i              # e.g. 2
-
-                # Sample random points from x0 and x1
-                x0_sample = sample_cells(x0, self.batch_size, self.device)
-                x1_sample = sample_cells(x1, self.batch_size, self.device)
-
-                # Flow-matching step returns:
-                #   t   \in [0,1]
-                #   x_t = (1-t)*x0 + t*x1 + noise
-                #   u_t = x1 - x0  (by default, total displacement)
-                # [:3] drops the 4th element torchcfm only returns for return_noise=True
-                t, x_t, u_t = self.flow_matcher.sample_location_and_conditional_flow(
-                    x0_sample, x1_sample
-                )[:3]
-
-                # 1) Scale t to the correct time interval [t_i, t_j].
-                T = t_i + delta_t * t
-
-                # 2) Convert total displacement into per-unit-time velocity:
-                #    if delta_t=2, then velocity = (x1 - x0) / 2
-                u_t = u_t / delta_t
-
-                ts_list.append(T)
-                xts_list.append(x_t)
-                uts_list.append(u_t)
-
+            per_pair = [self._sample_pair(i) for i in range(n_pairs)]
             # Concatenate across pairs
-            T_cat = torch.cat(ts_list, dim=0)
-            xT_cat = torch.cat(xts_list, dim=0)
-            uT_cat = torch.cat(uts_list, dim=0)
-
-            yield (xT_cat, T_cat, uT_cat)
+            yield tuple(torch.cat(parts, dim=0) for parts in zip(*per_pair))
 
 
 class IndependentFlowMatchingDataset(FlowMatchingDataset):
@@ -159,76 +149,30 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Precompute all optimal transport pairs between consecutive timepoints
-        self.precomputed_data = []
-
         print("Precomputing optimal transport pairs...")
+        self.precomputed_pairs = []
         for i in range(len(self.X_filtered) - 1):
-            x0 = self.X_filtered[i]
-            x1 = self.X_filtered[i + 1]
+            x0, x1, t_i, delta_t = self._pair(i)
+            print(f"  Processing time pair {t_i}->{t_i + delta_t} with "
+                  f"{x0.shape[0]} source points and {x1.shape[0]} target points")
 
-            # Convert to torch tensors
-            x0_tensor = to_tensor(x0, self.device)
-            x1_tensor = to_tensor(x1, self.device)
+            # Couple the whole marginals at once, not just a batch
+            pair = self._flow_sample(
+                to_tensor(x0, self.device),
+                to_tensor(x1, self.device),
+                t_i,
+                delta_t,
+            )
+            self.precomputed_pairs.append(pair)
 
-            # Original integer time labels
-            t_i = self.t_grid_filtered[i]
-            t_j = self.t_grid_filtered[i + 1]
-            delta_t = t_j - t_i
+            print(f"  Precomputed {pair[0].shape[0]} pairs for times {t_i}->{t_i + delta_t}")
 
-            print(
-                f"  Processing time pair {t_i}->{t_j} with {x0.shape[0]} source points and {x1.shape[0]} target points")
+        print(f"Precomputation completed for {len(self.precomputed_pairs)} consecutive timepoint pairs")
 
-            # Use the sample_location_and_conditional_flow method on the entire dataset at once
-            # This computes the OT problem for all points, not just a batch
-            all_t, all_x_t, all_u_t = self.flow_matcher.sample_location_and_conditional_flow(
-                x0_tensor, x1_tensor
-            )[:3]
-
-            # Scale t and u_t as in the original code
-            all_T = t_i + delta_t * all_t
-            all_u_t = all_u_t / delta_t
-
-            # Store the precomputed data
-            self.precomputed_data.append({
-                't': all_t,
-                'T': all_T,
-                'x_t': all_x_t,
-                'u_t': all_u_t,
-                't_i': t_i,
-                't_j': t_j,
-                'delta_t': delta_t
-            })
-
-            print(
-                f"  Precomputed {all_t.shape[0]} pairs for times {t_i}->{t_j}")
-
-        print(
-            f"Precomputation completed for {len(self.precomputed_data)} consecutive timepoint pairs")
-
-    def __iter__(self):
-        while True:
-            ts_list = []
-            xts_list = []
-            uts_list = []
-
-            # Sample from each precomputed pair
-            for pair_data in self.precomputed_data:
-                # Random sampling from the precomputed data
-                n_points = pair_data['x_t'].shape[0]
-                indices = np.random.randint(0, n_points, size=self.batch_size)
-
-                # Extract the sampled data
-                ts_list.append(pair_data['T'][indices])
-                xts_list.append(pair_data['x_t'][indices])
-                uts_list.append(pair_data['u_t'][indices])
-
-            # Concatenate across pairs
-            T_cat = torch.cat(ts_list, dim=0)
-            xT_cat = torch.cat(xts_list, dim=0)
-            uT_cat = torch.cat(uts_list, dim=0)
-
-            yield (xT_cat, T_cat, uT_cat)
+    def _sample_pair(self, i):
+        x_t, T, u_t = self.precomputed_pairs[i]
+        indices = np.random.randint(0, x_t.shape[0], size=self.batch_size)
+        return x_t[indices], T[indices], u_t[indices]
 
 
 class SkipMarginalEvalDataset(IterableDataset):
