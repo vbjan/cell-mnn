@@ -13,15 +13,23 @@ def split_evenly(total: int, n: int) -> list[int]:
     return [per_part] * (n - 1) + [total - per_part * (n - 1)]
 
 
-class FlowMatchingDataset(IterableDataset):
+class DayFilteredDataset(IterableDataset):
+    """
+    User gives skip_day_idx, which is the index of the day to skip.
+
+    Datastructure:
+    - day_indices for navigating through days and cells as range [0, n_days)
+    - X_filtered: list of numpy arrays, one per day, excluding the skip_day
+    - days_filtered: list of days corresponding to the acquisition days of each component of X_filtered (no skip_day)
+    """
+
     def __init__(
-            self, 
-            X, 
-            flow_matcher, 
-            batch_size, 
-            device, 
-            skip_day_idx,
+            self,
+            X,
             days,
+            batch_size,
+            device,
+            skip_day_idx,
             train_on_skip_day=False
         ):
         super().__init__()
@@ -40,19 +48,40 @@ class FlowMatchingDataset(IterableDataset):
             self.day_indices = range(self.n_days)
         else:
             self.day_indices = [i for i in range(self.n_days) if i != self.skip_day_idx]
-            
+
         self.days_filtered = [days[i] for i in self.day_indices]
         self.X_filtered = [X[i] for i in self.day_indices]
 
         self.cells_per_day = [x.shape[0] for x in self.X_filtered]
 
-        self.flow_matcher = flow_matcher
         self.batch_size = batch_size
         self.device = device
 
     def __len__(self):
         # heuristic decision: set number of batches per epoch equal to same number required to seeing each cell measurement once
         return int(sum(self.cells_per_day) / self.batch_size)
+
+
+class FlowMatchingDataset(DayFilteredDataset):
+    def __init__(
+            self,
+            X,
+            flow_matcher,
+            batch_size,
+            device,
+            skip_day_idx,
+            days,
+            train_on_skip_day=False
+        ):
+        super().__init__(
+            X=X,
+            days=days,
+            batch_size=batch_size,
+            device=device,
+            skip_day_idx=skip_day_idx,
+            train_on_skip_day=train_on_skip_day,
+        )
+        self.flow_matcher = flow_matcher
 
     def __iter__(self):
         while True:
@@ -255,45 +284,17 @@ class SkipMarginalEvalDataset(IterableDataset):
             return int(self.X_prev_day.shape[0] / self.batch_size)
 
 
-class MnnDataset(IterableDataset):
+class MnnDataset(DayFilteredDataset):
     def __init__(self, X, days, batch_size, skip_day_idx, device, train_on_skip_day=False):
-        """
-        User gives skip_day_idx, which is the index of the day to skip.
-
-        Datastructure:
-        - day_indices for navigating through days and cells as range [0, n_days)
-        - X_filtered: list of numpy arrays, one per day, excluding the skip_day
-        - days_filtered: list of days corresponding to the acquisition days of each component of X_filtered (no skip_day)
-        """
-        super().__init__()
-        self.train_on_skip_day = train_on_skip_day
-        n_days = len(X)
-        self.latent_dim = X[0].shape[-1]
-        self.days = days
-
-        self.skip_day_idx = skip_day_idx
-        assert 1 <= self.skip_day_idx <= n_days - \
-            1, "skip_day_idx must be in [1, n_days - 1]"
-        self.t_skip = days[skip_day_idx]
-
-        # Filter out the day we want to skip
-        if self.train_on_skip_day:
-            self.day_indices = range(n_days)
-        else:
-            self.day_indices = [i for i in range(
-                n_days) if i != self.skip_day_idx]
-
-        self.X_filtered = [X[i] for i in self.day_indices]
-        self.days_filtered = [days[i] for i in self.day_indices]
+        super().__init__(
+            X=X,
+            days=days,
+            batch_size=batch_size,
+            device=device,
+            skip_day_idx=skip_day_idx,
+            train_on_skip_day=train_on_skip_day,
+        )
         self.last_sample_day_idx = len(self.day_indices) - 2
-
-        self.cells_per_day = [x.shape[0] for x in self.X_filtered]
-
-        self.device = device
-        self.batch_size = batch_size
-
-    def __len__(self):
-        return int(sum(self.cells_per_day) / self.batch_size)
 
     def __iter__(self):
         while True:
