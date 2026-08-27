@@ -52,7 +52,6 @@ def parse_args(argv=None):
     parser.add_argument('--mmd_sigma', type=float, default=1.0,
                         help='Sigma for MMD loss')
     parser.add_argument('--ds_name', type=str, default='embryoid',)
-    parser.add_argument('--val_ds_name', type=str, default=None,)
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -69,7 +68,6 @@ def main(argv=None):
 
     train_dataset, val_dataset = get_datasets(
         ds_name=args.ds_name,
-        val_ds_name=args.val_ds_name,
         skip_idx=args.skip_idx,
         batch_size=args.batch_size,
         device=device,
@@ -96,7 +94,7 @@ def main(argv=None):
         mmd_sigma=args.mmd_sigma,
     )
     wandb_logger = WandbLogger(
-        project=f"scrna-seq-full-decomp_{args.ds_name}->{args.val_ds_name}",
+        project=f"scrna-seq-full-decomp_{args.ds_name}",
         name=model_name,
         save_dir="logs",
         log_model=False,

@@ -269,34 +269,6 @@ class MnnDataset(TimeFilteredDataset):
         t_population = repeat(
             t_population, 't -> b t 1', b=self.batch_size)
         return x_population, t_population
-    
-
-class MixedDataset(IterableDataset):
-    """
-    Switching between the per-dataset iterators for amortized training.
-    """
-
-    def __init__(
-            self,
-            datasets: list[MnnDataset]
-        ):
-        super().__init__()
-        self.datasets = datasets
-        self.latent_dim = datasets[0].latent_dim
-        self.t_skip = datasets[0].t_skip
-        self.device = datasets[0].device
-        self.t_grid = sorted({t for dataset in datasets for t in dataset.t_grid})
-
-    def __iter__(self):
-        # The child datasets are infinite iterators, so they never need resetting.
-        iterators = [iter(dataset) for dataset in self.datasets]
-        while True:
-            for dataset_iter in iterators:
-                yield next(dataset_iter)
-
-    def __len__(self):
-        # Sum of all dataset lengths
-        return sum(len(dataset) for dataset in self.datasets)
 
 
 TRAIN_DATASET_BY_METHOD = {
@@ -307,15 +279,16 @@ TRAIN_DATASET_BY_METHOD = {
 }
 
 
-def construct_train_val_datasets(
+def get_datasets(
         ds_name: str,
         skip_idx: int,
         batch_size: int,
-        device,
+        device: torch.device,
         method: str,
-        val_prop=0.0,
+        val_prop: float = 0.0,
         train_on_all_times: bool = False
     ):
+    """(train_dataset, val_dataset) for `ds_name`, holding out marginal `skip_idx`."""
     data_dir = get_data(ds_name=ds_name, val_prop=val_prop)
     X_train = data_dir["X_train"]
     t_grid = data_dir["t_train"]
@@ -345,56 +318,6 @@ def construct_train_val_datasets(
         batch_size=batch_size if too_big else None,
     )
     return train_dataset, val_dataset
-
-
-def get_datasets(
-        ds_name: str,
-        val_ds_name: str | None,
-        skip_idx: int,
-        train_on_all_times: bool = False,
-        *args,
-        **kwargs
-    ):
-    if ds_name != "mix":
-        assert val_ds_name is None, "val_ds_name should be None when ds_name is not 'mix'"
-        return construct_train_val_datasets(
-                ds_name,
-                skip_idx=skip_idx,
-                train_on_all_times=train_on_all_times,
-                *args,
-                **kwargs
-            )
-    else:
-        all_ds_names = set(["cite", "multi"])
-        assert val_ds_name in all_ds_names, f"val_ds_name must be one of {all_ds_names}, got {val_ds_name}"
-        
-        ds_collection = []
-        train, val_dataset = construct_train_val_datasets(
-            ds_name=val_ds_name,
-            train_on_all_times=train_on_all_times,
-            skip_idx=skip_idx,
-            *args,
-            **kwargs
-        )
-        ds_collection.append(train)
-
-        all_ds_names.remove(val_ds_name)
-        for _ds_name in all_ds_names:
-
-            _train, _ = construct_train_val_datasets(
-                ds_name=_ds_name,
-                train_on_all_times=train_on_all_times,
-                skip_idx=skip_idx,
-                *args,
-                **kwargs
-            )
-            ds_collection.append(_train)
-        
-        train_dataset = MixedDataset(
-            datasets=ds_collection
-        )
-        return train_dataset, val_dataset
-
 
 
 if __name__ == "__main__":

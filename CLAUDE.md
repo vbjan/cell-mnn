@@ -30,9 +30,6 @@ PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name embryoid
 # Extra random timepoints for the kinetic regularizer
 PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name embryoid --kinetic_grid_multiplier 4
 
-# Amortized: train on cite+multi jointly, validate on one of them
-PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name mix --val_ds_name cite --width 128
-
 # Baselines (I-CFM / OT-CFM), same CLI shape
 PYTHONPATH=src python -m cell_mnn.cli.train_cfm --skip_idx 1 --ds_name embryoid --method i-cfm
 
@@ -41,8 +38,8 @@ python data/inflate_data.py data/ebdata/eb_velocity_v5.npz 50000 --noise_std 0.1
 python data/recompute_pca.py data/ebdata/ebdata_v3.h5ad -n 50
 ```
 
-`train_mnn.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --seed --lr --weight_decay --batch_size --train_on_all_times --lambda_kinetic --gamma --kinetic_grid_multiplier --width --depth --init_scale --mmd_sigma --ds_name --val_ds_name --resume_from_checkpoint`.
-`train_cfm.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --method --seed --ds_name --val_ds_name --batch_size`.
+`train_mnn.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --seed --lr --weight_decay --batch_size --train_on_all_times --lambda_kinetic --gamma --kinetic_grid_multiplier --width --depth --init_scale --mmd_sigma --ds_name --resume_from_checkpoint`.
+`train_cfm.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --method --seed --ds_name --batch_size`.
 
 There is **no test suite** (`pytest` is in the env but no test files exist). The closest thing to unit checks are the `__main__` blocks in `src/cell_mnn/data/data_preprocessing.py` and `src/cell_mnn/data/data_loading.py`, runnable as `PYTHONPATH=src python -m cell_mnn.data.data_preprocessing`.
 
@@ -57,21 +54,20 @@ Operational notes:
 
 ## Architecture
 
-The whole pipeline is built around one evaluation protocol: **leave-one-marginal-out interpolation**. Timepoint `skip_idx` is dropped from training; validation/test predicts that marginal by evolving the *previous* timepoint's cells forward, scored with exact Wasserstein-1. The metric key is constructed dynamically as `val_emd(t_skip={t_skip})` and both `EarlyStopping` and `ModelCheckpoint` monitor that exact string — renaming the log key breaks training silently. Read the value off the object that *logs* it (`train_mnn.py` uses `train_dataset.t_skip`, `train_cfm.py` uses `cfm_model.t_skip`) rather than re-deriving it by indexing a grid; for `ds_name="mix"` those differ.
+The whole pipeline is built around one evaluation protocol: **leave-one-marginal-out interpolation**. Timepoint `skip_idx` is dropped from training; validation/test predicts that marginal by evolving the *previous* timepoint's cells forward, scored with exact Wasserstein-1. The metric key is constructed dynamically as `val_emd(t_skip={t_skip})` and both `EarlyStopping` and `ModelCheckpoint` monitor that exact string — renaming the log key breaks training silently. Read the value off the object that *logs* it (`train_mnn.py` uses `train_dataset.t_skip`, `train_cfm.py` uses `cfm_model.t_skip`) rather than re-deriving it by indexing a grid.
 
 **1. Preprocessing — `src/cell_mnn/data/data_preprocessing.py::get_data`**
 Dispatches on `ds_name` to one of the h5ad/npz files, takes the first `pca_dims=5` *precomputed* PCs (`obsm["X_pca"]`, or `"pcs"` for the npz), z-scores them globally, then returns `X_train` as a **list of arrays, one per timepoint** plus the `t_train` labels. Timepoint selection is per-dataset (`obs["day"]` vs `obs["sample_labels"]` vs `.cat.codes`), so adding a dataset means touching two branches. `pca_dims` is not exposed on any CLI, and `train_cfm.py` hardcodes `latent_dim = 5` — the latent dimension is effectively fixed at 5 repo-wide.
 
-Valid `ds_name`: `embryoid`, `embryoid_less_preprocessed`, `embryoid_inflated`, `cite`, `cite_inflated`, `multi`, `multi_inflated`, and `mix` (handled one level up in `get_datasets`).
+Valid `ds_name`: `embryoid`, `embryoid_less_preprocessed`, `embryoid_inflated`, `cite`, `cite_inflated`, `multi`, `multi_inflated`.
 
 **2. Datasets — `src/cell_mnn/data/data_loading.py`**
 Every dataset is an `IterableDataset` that yields *already-batched* tensors on the target device, so all `DataLoader`s are constructed with `batch_size=None`. `__len__` is a heuristic (total cells ÷ batch size) that defines what an "epoch" means. `TimeFilteredDataset` is the shared base: it drops index `skip_idx` and exposes `X_filtered` / `t_grid_filtered` / `cells_per_t` over the surviving timepoints (`train_on_skip=True` keeps all of them).
 
 - `MnnDataset` → `(x_t, t, x_population, t_population)`: per-cell initial conditions spread across timepoints, plus a resampled full marginal for *every* timepoint, which is what the MMD loss compares against.
-- `SkipMarginalEvalDataset` → `(x_t_prev, t, x_t_skip, t_skip)`. Used for val/test by **both** methods. Loads whole marginals in a single batch unless the dataset exceeds 10k cells at the first timepoint (`too_big` in `construct_train_val_datasets`), because exact OT over everything gets expensive.
+- `SkipMarginalEvalDataset` → `(x_t_prev, t, x_t_skip, t_skip)`. Used for val/test by **both** methods. Loads whole marginals in a single batch unless the dataset exceeds 10k cells at the first timepoint (`too_big` in `get_datasets`), because exact OT over everything gets expensive.
 - `IndependentFlowMatchingDataset` / `BatchOTFlowMatchingDataset` / `OTFlowMatchingDataset` → `(xT, T, uT)` for the CFM baselines, with `t∈[0,1]` rescaled onto the real interval `[t_i, t_j]` and displacement converted to per-unit-time velocity (`u_t / delta_t`). This is what lets the baselines handle non-uniform time gaps and the skipped timepoint.
-- `MixedDataset` (`ds_name="mix"`) round-robins between the cite and multi iterators for amortized training; validation still comes from `val_ds_name` only. Its `t_grid` is the sorted **union** of both grids, so `t_grid[skip_idx]` is not necessarily the `t_skip` being evaluated — use `.t_skip`, which is inherited from `datasets[0]` (the `val_ds_name` one).
-- `get_datasets` is the single entry point used by both training scripts; `method` (`"mnn"`, `"i-cfm"`, `"batch-ot-cfm"`, `"ot-cfm"`) selects the train-dataset class via the `TRAIN_DATASET_BY_METHOD` table. All four train classes take the same constructor keywords; the three CFM baselines differ only in the `flow_matcher_cls` class attribute, so adding a baseline means one subclass plus one table entry. Cell sampling goes through the module-level `to_tensor` / `sample_cells` helpers.
+- `get_datasets` is the single entry point used by both training scripts, building the train/val pair for one `ds_name`; `method` (`"mnn"`, `"i-cfm"`, `"batch-ot-cfm"`, `"ot-cfm"`) selects the train-dataset class via the `TRAIN_DATASET_BY_METHOD` table. All four train classes take the same constructor keywords; the three CFM baselines differ only in the `flow_matcher_cls` class attribute, so adding a baseline means one subclass plus one table entry. Cell sampling goes through the module-level `to_tensor` / `sample_cells` helpers.
 
 **3. Model — `src/cell_mnn/model.py::CellMNN` (`pl.LightningModule`)**
 `encode(x_t, t)`: one MLP (LeakyReLU, `depth` hidden layers of `width`, kaiming-init, last layer scaled by `init_scale`) maps the `D+1` input to `latent_dim²` outputs, reshaped **directly** into the local operator `A` of shape `(B, 1, D, D)`. There is no eigen-parameterization — no `P`, no eigenvalue vector, no `num_const_dims` ablation.

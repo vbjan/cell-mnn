@@ -40,7 +40,6 @@ def parse_args(argv=None):
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--ds_name', type=str, default='embryoid',)
-    parser.add_argument('--val_ds_name', type=str, default=None,)
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
     return parser.parse_args(argv)
@@ -152,7 +151,6 @@ def main(argv=None):
     # Instantiate the dataset
     train_dataset, val_dataset = get_datasets(
         ds_name=args.ds_name,
-        val_ds_name=args.val_ds_name,
         skip_idx=args.skip_idx,
         train_on_all_times=False,
         method=args.method,
@@ -174,7 +172,7 @@ def main(argv=None):
     model_name = f"{args.method}_5-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
 
     wandb_logger = WandbLogger(
-        project=f"OT-CFM-{args.ds_name}->{args.val_ds_name}",
+        project=f"OT-CFM-{args.ds_name}",
         name=model_name,
         save_dir="logs",
         log_model=False,
