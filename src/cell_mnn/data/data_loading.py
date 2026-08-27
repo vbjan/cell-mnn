@@ -11,8 +11,8 @@ class FlowMatchingDataset(IterableDataset):
     """
     An IterableDataset that, on each iteration, samples from all
     consecutive *filtered* timepoints (skipping one day) and yields:
-      - T  in the real interval [day_i, day_j] (not just day_i + t).
       - xT the sampled points at fractional time T.
+      - T  in the real interval [day_i, day_j] (not just day_i + t).
       - uT the *per-unit-time* velocity, i.e. (x1 - x0) / (day_j - day_i).
     """
 
@@ -69,9 +69,9 @@ class FlowMatchingDataset(IterableDataset):
     def __iter__(self):
         """
         Yields:
+            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
             T   (Tensor): shape [(num_pairs)*batch_size].
                           Real time in [day_i, day_j], properly scaled.
-            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
             uT  (Tensor): shape [(num_pairs)*batch_size, dim].
                           Per-day velocity = (x1 - x0) / (day_j - day_i).
         """
@@ -123,7 +123,7 @@ class FlowMatchingDataset(IterableDataset):
             xT_cat = torch.cat(xts_list, dim=0)
             uT_cat = torch.cat(uts_list, dim=0)
 
-            yield (T_cat, xT_cat, uT_cat)
+            yield (xT_cat, T_cat, uT_cat)
 
 
 class IndependentFlowMatchingDataset(FlowMatchingDataset):
@@ -212,9 +212,9 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
     def __iter__(self):
         """
         Yields:
+            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
             T   (Tensor): shape [(num_pairs)*batch_size].
                           Real time in [day_i, day_j], properly scaled.
-            xT  (Tensor): shape [(num_pairs)*batch_size, dim].
             uT  (Tensor): shape [(num_pairs)*batch_size, dim].
                           Per-day velocity = (x1 - x0) / (day_j - day_i).
         """
@@ -239,7 +239,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             xT_cat = torch.cat(xts_list, dim=0)
             uT_cat = torch.cat(uts_list, dim=0)
 
-            yield (T_cat, xT_cat, uT_cat)
+            yield (xT_cat, T_cat, uT_cat)
 
 
 class EmbryoidFlowMatchingTestDataset(IterableDataset):
@@ -281,7 +281,7 @@ class EmbryoidFlowMatchingTestDataset(IterableDataset):
             t = torch.full((x_prev_day.shape[0],), float(
                 self.t_prev), device=self.device)
 
-            yield (t, x_prev_day, x_t_skip, self.t_skip)
+            yield (x_prev_day, t, x_t_skip, self.t_skip)
 
     def __len__(self):
         if self.batch_size is None:

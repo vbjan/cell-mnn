@@ -226,7 +226,7 @@ class CellMNN(pl.LightningModule):
         batch_idx: int,
         num_iter_max: int = 200_000
     ) -> float:
-        t, x_t, x_t_skip, t_skip = batch
+        x_t, t, x_t_skip, t_skip = batch
 
         x_t = rearrange(x_t, 'i d -> i 1 d')
         t = rearrange(t, 'i -> i 1 1')

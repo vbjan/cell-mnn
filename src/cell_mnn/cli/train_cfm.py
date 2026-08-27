@@ -92,21 +92,21 @@ class FlowMatchingModel(pl.LightningModule):
         return vt
 
     def training_step(self, batch, batch_idx):
-        t, xt, ut = batch
+        xt, t, ut = batch
         vt = self.forward(torch.cat([xt, t.unsqueeze(-1)], dim=-1))
         loss = torch.mean((vt - ut) ** 2)
         self.log("train_loss", loss)
         return loss
 
     def in_distribution_validation_step(self, batch, batch_idx):
-        t, xt, ut = batch
+        xt, t, ut = batch
         vt = self.forward(torch.cat([xt, t.unsqueeze(-1)], dim=-1))
         loss = torch.mean((vt - ut) ** 2)
         self.log("val_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx, num_iter_max=200_000):
-        t, x_prev_day, x_t_skip, _ = batch
+        x_prev_day, t, x_t_skip, _ = batch
         t_span = torch.arange(self.t_prev, self.t_skip + self.dt, self.dt)
         traj = self.node.trajectory(
             x_prev_day,
