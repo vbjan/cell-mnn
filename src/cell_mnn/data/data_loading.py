@@ -245,7 +245,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             yield (xT_cat, T_cat, uT_cat)
 
 
-class EmbryoidFlowMatchingTestDataset(IterableDataset):
+class SkipMarginalEvalDataset(IterableDataset):
     def __init__(self, X, days, device, skip_day_idx, batch_size=None):
         super().__init__()
         self.n_times = len(X)
@@ -455,7 +455,7 @@ def construct_train_val_datasets(
     )
     # Compute validation score batch wise only if dataset is too big to compute OT for all points
     too_big = X_train[0].shape[0] > 10_000 
-    val_dataset = EmbryoidFlowMatchingTestDataset(
+    val_dataset = SkipMarginalEvalDataset(
         X=X_train,
         days=days,
         device=device,

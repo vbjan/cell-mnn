@@ -58,7 +58,7 @@ Valid `ds_name`: `embryoid`, `embryoid_less_preprocessed`, `embryoid_inflated`, 
 Every dataset is an `IterableDataset` that yields *already-batched* tensors on the target device, so all `DataLoader`s are constructed with `batch_size=None`. `__len__` is a heuristic (total cells ÷ batch size) that defines what an "epoch" means.
 
 - `MnnDataset` → `(x_t, t, x_population, t_population)`: per-cell initial conditions spread across days, plus a resampled full marginal for *every* day, which is what the MMD loss compares against.
-- `EmbryoidFlowMatchingTestDataset` → `(t, x_prev_day, x_skip_day, x_next_avail_day)`. Used for val/test by **both** methods. Loads whole marginals in a single batch unless the dataset exceeds 10k cells per day (`too_big` in `construct_train_val_datasets`), because exact OT over everything gets expensive.
+- `SkipMarginalEvalDataset` → `(t, x_prev_day, x_skip_day, x_next_avail_day)`. Used for val/test by **both** methods. Loads whole marginals in a single batch unless the dataset exceeds 10k cells per day (`too_big` in `construct_train_val_datasets`), because exact OT over everything gets expensive.
 - `IndependentFlowMatchingDataset` / `BatchOTFlowMatchingDataset` / `OTFlowMatchingDataset` → `(T, xT, uT)` for the CFM baselines, with `t∈[0,1]` rescaled to real day intervals and displacement converted to per-day velocity (`u_t / day_diff`). This is what lets the baselines handle non-uniform day gaps and the skipped day.
 - `MixedDataset` (`ds_name="mix"`) round-robins between the cite and multi iterators for amortized training; validation still comes from `val_ds_name` only.
 - `get_datasets` is the single entry point used by both training scripts; `method` (`"mnn"`, `"i-cfm"`, `"batch-ot-cfm"`, `"ot-cfm"`) selects the train-dataset class.
@@ -90,6 +90,6 @@ The README documents scripts that were deleted in `c0a43ef` ("deleted unnecessar
 
 - `validate_on_trrust.py`, `pure_OT_interpolation.py`, and the `pre_trained_models/` checkpoints no longer exist. The surviving halves of that experiment are `lib/interpretability.py` and the ground-truth TSVs in `data/tf_targets_trrust/` (FOS, HMGA1, JUN, POU5F1, SOX2, YBX1). Recover the driver with `git show c0a43ef^:validate_on_trrust.py` before re-implementing it.
 - `--method ot-cfm` is currently broken: `OTFlowMatchingDataset.__iter__` uses `self.rng`, which is never assigned (`lib/data/data_loading.py:233`). `i-cfm` and `batch-ot-cfm` work.
-- `MnnDataset` and `EmbryoidFlowMatchingTestDataset` assert `0 < skip_day_idx < n_days - 1`, so the **final** day cannot be held out — narrower than the README's `1, 2, ..., t_max - 1`.
+- `MnnDataset` and `SkipMarginalEvalDataset` assert `0 < skip_day_idx < n_days - 1`, so the **final** day cannot be held out — narrower than the README's `1, 2, ..., t_max - 1`.
 - `train_mnn.py` sets `CUBLAS_WORKSPACE_CONFIG` "to force determinism", but calls `fix_seed(seed, use_det_algos=False)`; deterministic algorithms are off by default.
 - `.vscode/settings.json` pins an interpreter path that is not `cell_mnn_env`.
