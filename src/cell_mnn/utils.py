@@ -32,12 +32,3 @@ def save_hyperparams_to_json(
     print(f"Hyperparameters saved to {hyperparams_path}")
 
 
-def str2bool(v: str) -> bool:
-    if isinstance(v, bool):          # lets you pass a real bool when you call the script manually
-        return v
-    v = v.lower()
-    if v in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v in ("no", "false", "f", "n", "0"):
-        return False
-    raise argparse.ArgumentTypeError("Boolean value expected.")
