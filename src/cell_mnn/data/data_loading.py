@@ -13,73 +13,73 @@ def split_evenly(total: int, n: int) -> list[int]:
     return [per_part] * (n - 1) + [total - per_part * (n - 1)]
 
 
-class DayFilteredDataset(IterableDataset):
+class TimeFilteredDataset(IterableDataset):
     """
-    User gives skip_day_idx, which is the index of the day to skip.
+    User gives skip_idx, which is the index of the timepoint to skip.
 
     Datastructure:
-    - day_indices for navigating through days and cells as range [0, n_days)
-    - X_filtered: list of numpy arrays, one per day, excluding the skip_day
-    - days_filtered: list of days corresponding to the acquisition days of each component of X_filtered (no skip_day)
+    - t_indcs for navigating through timepoints and cells as range [0, n_times)
+    - X_filtered: list of numpy arrays, one per timepoint, excluding the skipped one
+    - t_grid_filtered: list of times corresponding to the acquisition times of each component of X_filtered (no t_skip)
     """
 
     def __init__(
             self,
             X,
-            days,
+            t_grid,
             batch_size,
             device,
-            skip_day_idx,
-            train_on_skip_day=False
+            skip_idx,
+            train_on_skip=False
         ):
         super().__init__()
 
-        self.n_days = len(X)
-        self.days = days
-        self.skip_day_idx = skip_day_idx
-        self.t_skip = days[skip_day_idx]
-        self.train_on_skip_day = train_on_skip_day
+        self.n_times = len(X)
+        self.t_grid = t_grid
+        self.skip_idx = skip_idx
+        self.t_skip = t_grid[skip_idx]
+        self.train_on_skip = train_on_skip
         self.latent_dim = X[0].shape[-1]
-        assert 1 <= self.skip_day_idx <= self.n_days - \
-            1, "skip_day_idx must be in [1, n_days - 1]"
+        assert 1 <= self.skip_idx <= self.n_times - \
+            1, "skip_idx must be in [1, n_times - 1]"
 
-        # Filter out the day we want to skip
-        if self.train_on_skip_day:
-            self.day_indices = range(self.n_days)
+        # Filter out the timepoint we want to skip
+        if self.train_on_skip:
+            self.t_indcs = range(self.n_times)
         else:
-            self.day_indices = [i for i in range(self.n_days) if i != self.skip_day_idx]
+            self.t_indcs = [i for i in range(self.n_times) if i != self.skip_idx]
 
-        self.days_filtered = [days[i] for i in self.day_indices]
-        self.X_filtered = [X[i] for i in self.day_indices]
+        self.t_grid_filtered = [t_grid[i] for i in self.t_indcs]
+        self.X_filtered = [X[i] for i in self.t_indcs]
 
-        self.cells_per_day = [x.shape[0] for x in self.X_filtered]
+        self.cells_per_t = [x.shape[0] for x in self.X_filtered]
 
         self.batch_size = batch_size
         self.device = device
 
     def __len__(self):
         # heuristic decision: set number of batches per epoch equal to same number required to seeing each cell measurement once
-        return int(sum(self.cells_per_day) / self.batch_size)
+        return int(sum(self.cells_per_t) / self.batch_size)
 
 
-class FlowMatchingDataset(DayFilteredDataset):
+class FlowMatchingDataset(TimeFilteredDataset):
     def __init__(
             self,
             X,
             flow_matcher,
             batch_size,
             device,
-            skip_day_idx,
-            days,
-            train_on_skip_day=False
+            skip_idx,
+            t_grid,
+            train_on_skip=False
         ):
         super().__init__(
             X=X,
-            days=days,
+            t_grid=t_grid,
             batch_size=batch_size,
             device=device,
-            skip_day_idx=skip_day_idx,
-            train_on_skip_day=train_on_skip_day,
+            skip_idx=skip_idx,
+            train_on_skip=train_on_skip,
         )
         self.flow_matcher = flow_matcher
 
@@ -90,16 +90,16 @@ class FlowMatchingDataset(DayFilteredDataset):
             uts_list = []
 
             # Go over consecutive pairs in the filtered list
-            # e.g. if skip_day=3, day_indices might be [0,1,2,4,5],
+            # e.g. if skip_idx=3, t_indcs might be [0,1,2,4,5],
             # so pairs are (0->1), (1->2), (2->4), (4->5).
             for i in range(len(self.X_filtered) - 1):
                 x0 = self.X_filtered[i]
                 x1 = self.X_filtered[i + 1]
 
-                # Original integer day labels
-                day_i = self.days_filtered[i]      # e.g. 2
-                day_j = self.days_filtered[i + 1]  # e.g. 4
-                day_diff = day_j - day_i         # e.g. 2
+                # Original integer time labels
+                t_i = self.t_grid_filtered[i]      # e.g. 2
+                t_j = self.t_grid_filtered[i + 1]  # e.g. 4
+                delta_t = t_j - t_i              # e.g. 2
 
                 # Sample random points from x0 and x1
                 idx0 = np.random.randint(0, x0.shape[0], size=self.batch_size)
@@ -116,12 +116,12 @@ class FlowMatchingDataset(DayFilteredDataset):
                     x0_sample, x1_sample
                 )
 
-                # 1) Scale t to the correct day interval [day_i, day_j].
-                T = day_i + day_diff * t
+                # 1) Scale t to the correct time interval [t_i, t_j].
+                T = t_i + delta_t * t
 
                 # 2) Convert total displacement into per-unit-time velocity:
-                #    if day_diff=2, then velocity = (x1 - x0) / 2
-                u_t = u_t / day_diff  
+                #    if delta_t=2, then velocity = (x1 - x0) / 2
+                u_t = u_t / delta_t
 
                 ts_list.append(T)
                 xts_list.append(x_t)
@@ -174,13 +174,13 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             x0_tensor = torch.from_numpy(x0).float().to(self.device)
             x1_tensor = torch.from_numpy(x1).float().to(self.device)
 
-            # Original integer day labels
-            day_i = self.days_filtered[i]
-            day_j = self.days_filtered[i + 1]
-            day_diff = day_j - day_i
+            # Original integer time labels
+            t_i = self.t_grid_filtered[i]
+            t_j = self.t_grid_filtered[i + 1]
+            delta_t = t_j - t_i
 
             print(
-                f"  Processing day pair {day_i}->{day_j} with {x0.shape[0]} source points and {x1.shape[0]} target points")
+                f"  Processing time pair {t_i}->{t_j} with {x0.shape[0]} source points and {x1.shape[0]} target points")
 
             # Use the sample_location_and_conditional_flow method on the entire dataset at once
             # This computes the OT problem for all points, not just a batch
@@ -189,8 +189,8 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             )
 
             # Scale t and u_t as in the original code
-            all_T = day_i + day_diff * all_t
-            all_u_t = all_u_t / day_diff
+            all_T = t_i + delta_t * all_t
+            all_u_t = all_u_t / delta_t
 
             # Store the precomputed data
             self.precomputed_data.append({
@@ -198,13 +198,13 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
                 'T': all_T,
                 'x_t': all_x_t,
                 'u_t': all_u_t,
-                'day_i': day_i,
-                'day_j': day_j,
-                'day_diff': day_diff
+                't_i': t_i,
+                't_j': t_j,
+                'delta_t': delta_t
             })
 
             print(
-                f"  Precomputed {all_t.shape[0]} pairs for days {day_i}->{day_j}")
+                f"  Precomputed {all_t.shape[0]} pairs for times {t_i}->{t_j}")
 
         print(
             f"Precomputation completed for {len(self.precomputed_data)} consecutive timepoint pairs")
@@ -235,45 +235,45 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 
 
 class SkipMarginalEvalDataset(IterableDataset):
-    def __init__(self, X, days, device, skip_day_idx, batch_size=None):
+    def __init__(self, X, t_grid, device, skip_idx, batch_size=None):
         super().__init__()
         self.n_times = len(X)
 
-        self.skip_day_idx = skip_day_idx
-        assert 1 <= self.skip_day_idx <= self.n_times - \
-            1, "skip_day_idx must be in [1, n_days - 1]"
-        self.t_skip = days[self.skip_day_idx]
+        self.skip_idx = skip_idx
+        assert 1 <= self.skip_idx <= self.n_times - \
+            1, "skip_idx must be in [1, n_times - 1]"
+        self.t_skip = t_grid[self.skip_idx]
         self.batch_size = batch_size
 
-        # Predict distribution at t_skip from previous day
-        self.prev_day_idx = skip_day_idx - 1
-        self.t_prev = days[self.prev_day_idx]
+        # Predict distribution at t_skip from previous timepoint
+        self.prev_idx = skip_idx - 1
+        self.t_prev = t_grid[self.prev_idx]
 
         assert self.t_prev <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to t_prev {self.t_prev}"
-        self.X_prev_day = X[self.prev_day_idx]
-        self.X_t_skip = X[self.skip_day_idx]
+        self.X_t_prev = X[self.prev_idx]
+        self.X_t_skip = X[self.skip_idx]
 
         self.device = device
 
     def __iter__(self):
         while True:
             if self.batch_size is None:
-                indices_prev = np.arange(self.X_prev_day.shape[0])
+                indices_prev = np.arange(self.X_t_prev.shape[0])
                 indices_t_skip = np.arange(self.X_t_skip.shape[0])
             else:
                 # Batched behavior: sample random indices
-                indices_prev = np.random.randint(0, self.X_prev_day.shape[0], size=self.batch_size)
+                indices_prev = np.random.randint(0, self.X_t_prev.shape[0], size=self.batch_size)
                 indices_t_skip = np.random.randint(0, self.X_t_skip.shape[0], size=self.batch_size)
 
-            x_prev_day = torch.from_numpy(
-                self.X_prev_day[indices_prev]).float().to(self.device)
+            x_t_prev = torch.from_numpy(
+                self.X_t_prev[indices_prev]).float().to(self.device)
             x_t_skip = torch.from_numpy(
                 self.X_t_skip[indices_t_skip]).float().to(self.device)
 
-            t = torch.full((x_prev_day.shape[0],), float(
+            t = torch.full((x_t_prev.shape[0],), float(
                 self.t_prev), device=self.device)
 
-            yield (x_prev_day, t, x_t_skip, self.t_skip)
+            yield (x_t_prev, t, x_t_skip, self.t_skip)
 
     def __len__(self):
         if self.batch_size is None:
@@ -281,45 +281,45 @@ class SkipMarginalEvalDataset(IterableDataset):
             return 1
         else:
             # Number of batches needed to see all data once
-            return int(self.X_prev_day.shape[0] / self.batch_size)
+            return int(self.X_t_prev.shape[0] / self.batch_size)
 
 
-class MnnDataset(DayFilteredDataset):
-    def __init__(self, X, days, batch_size, skip_day_idx, device, train_on_skip_day=False):
+class MnnDataset(TimeFilteredDataset):
+    def __init__(self, X, t_grid, batch_size, skip_idx, device, train_on_skip=False):
         super().__init__(
             X=X,
-            days=days,
+            t_grid=t_grid,
             batch_size=batch_size,
             device=device,
-            skip_day_idx=skip_day_idx,
-            train_on_skip_day=train_on_skip_day,
+            skip_idx=skip_idx,
+            train_on_skip=train_on_skip,
         )
-        self.last_sample_day_idx = len(self.day_indices) - 2
+        self.last_sample_idx = len(self.t_indcs) - 2
 
     def __iter__(self):
         while True:
-            # Rows are grouped by the initial condition's day. The loss sums over
+            # Rows are grouped by the initial condition's timepoint. The loss sums over
             # per-row masks, so it does not depend on the order of the rows.
-            x_t, t = self._sample_batch_from_all_days()
+            x_t, t = self._sample_batch_from_all_times()
             x_population, t_population = self._sample_population()
             yield x_t, t, x_population, t_population
 
-    def _sample_batch_from_all_days(self):
-        # The final day cannot serve as an initial condition: no later marginal
+    def _sample_batch_from_all_times(self):
+        # The final timepoint cannot serve as an initial condition: no later marginal
         # is left to supervise its trajectory.
-        num_source_days = self.last_sample_day_idx + 1
-        num_samples = split_evenly(self.batch_size, num_source_days)
+        num_source_times = self.last_sample_idx + 1
+        num_samples = split_evenly(self.batch_size, num_source_times)
 
         x_ts = []
         t = []
         for i, bs in enumerate(num_samples):
             cell_indices = np.random.randint(
-                0, self.cells_per_day[i], size=bs)
+                0, self.cells_per_t[i], size=bs)
             cells = torch.from_numpy(
                 self.X_filtered[i][cell_indices]
             ).float().to(self.device)
             x_ts.append(cells.unsqueeze(1))  # Add time dimension
-            t.append(torch.full((bs, 1, 1), float(self.days_filtered[i]),
+            t.append(torch.full((bs, 1, 1), float(self.t_grid_filtered[i]),
                                 device=self.device))
 
         # Concatenate x_ts along the batch dimension
@@ -331,9 +331,9 @@ class MnnDataset(DayFilteredDataset):
     def _sample_population(self):
         # Sample batch_size points from each time point for population
         x_population = []
-        for i in range(len(self.day_indices)):
+        for i in range(len(self.t_indcs)):
             cell_indices = np.random.randint(
-                0, self.cells_per_day[i], size=self.batch_size)
+                0, self.cells_per_t[i], size=self.batch_size)
             cells = torch.from_numpy(
                 self.X_filtered[i][cell_indices]).float().to(self.device)
             # Add time dimension
@@ -342,7 +342,7 @@ class MnnDataset(DayFilteredDataset):
         # Concatenate population along the time dimension
         x_population = torch.cat(x_population, dim=1)
         t_population = torch.tensor(
-            self.days_filtered, dtype=torch.float
+            self.t_grid_filtered, dtype=torch.float
         ).to(self.device)
         t_population = repeat(
             t_population, 't -> b t 1', b=self.batch_size)
@@ -358,8 +358,8 @@ class MixedDataset(MnnDataset):
         self.dataset_iterators = [iter(dataset) for dataset in datasets]
         self.latent_dim = datasets[0].latent_dim
         self.t_skip = datasets[0].t_skip
-        self.days = [day for dataset in datasets for day in dataset.days]
-        self.days = sorted(list(set(self.days)))  # Remove duplicates and sort
+        self.t_grid = [t for dataset in datasets for t in dataset.t_grid]
+        self.t_grid = sorted(list(set(self.t_grid)))  # Remove duplicates and sort
         self.device = datasets[0].device
 
     def __iter__(self):
@@ -381,16 +381,16 @@ class MixedDataset(MnnDataset):
 
 def construct_train_val_datasets(
         ds_name: str,
-        skip_day_idx: int,
+        skip_idx: int,
         batch_size: int,
-        device,   
-        method: str, 
+        device,
+        method: str,
         val_prop=0.0,
-        train_on_all_days: bool = False
+        train_on_all_times: bool = False
     ):
     data_dir = get_data(ds_name=ds_name, val_prop=val_prop)
     X_train = data_dir["X_train"]
-    days = data_dir["t_train"]
+    t_grid = data_dir["t_train"]
 
     assert method in ["ot-cfm", "mnn", "i-cfm", "batch-ot-cfm"], \
         f"Unrecognized method: {method}. Must be one of ['ot-cfm', 'mnn', 'i-cfm', 'batch-ot-cfm']"
@@ -408,19 +408,19 @@ def construct_train_val_datasets(
     
     train_dataset = ds_constructor(
         X=X_train,
-        days=days,
-        skip_day_idx=skip_day_idx,
+        t_grid=t_grid,
+        skip_idx=skip_idx,
         batch_size=batch_size,
         device=device,
-        train_on_skip_day=train_on_all_days
+        train_on_skip=train_on_all_times
     )
     # Compute validation score batch wise only if dataset is too big to compute OT for all points
-    too_big = X_train[0].shape[0] > 10_000 
+    too_big = X_train[0].shape[0] > 10_000
     val_dataset = SkipMarginalEvalDataset(
         X=X_train,
-        days=days,
+        t_grid=t_grid,
         device=device,
-        skip_day_idx=skip_day_idx,
+        skip_idx=skip_idx,
         batch_size=batch_size if too_big else None,
     )
     return train_dataset, val_dataset
@@ -429,18 +429,18 @@ def construct_train_val_datasets(
 def get_datasets(
         ds_name: str,
         val_ds_name: str | None,
-        skip_day_idx: int,
-        train_on_all_days: bool = False,
+        skip_idx: int,
+        train_on_all_times: bool = False,
         *args,
         **kwargs
     ):
     if ds_name != "mix":
         assert val_ds_name is None, "val_ds_name should be None when ds_name is not 'mix'"
         return construct_train_val_datasets(
-                ds_name, 
-                skip_day_idx=skip_day_idx,
-                train_on_all_days=train_on_all_days,
-                *args, 
+                ds_name,
+                skip_idx=skip_idx,
+                train_on_all_times=train_on_all_times,
+                *args,
                 **kwargs
             )
     else:
@@ -450,8 +450,8 @@ def get_datasets(
         ds_collection = []
         train, val_dataset = construct_train_val_datasets(
             ds_name=val_ds_name,
-            train_on_all_days=train_on_all_days,
-            skip_day_idx=skip_day_idx,
+            train_on_all_times=train_on_all_times,
+            skip_idx=skip_idx,
             *args,
             **kwargs
         )
@@ -462,8 +462,8 @@ def get_datasets(
 
             _train, _ = construct_train_val_datasets(
                 ds_name=_ds_name,
-                train_on_all_days=train_on_all_days,
-                skip_day_idx=skip_day_idx,  
+                train_on_all_times=train_on_all_times,
+                skip_idx=skip_idx,
                 *args,
                 **kwargs
             )
@@ -479,13 +479,13 @@ def get_datasets(
 if __name__ == "__main__":
     data_dir = get_data(val_prop=0.1)
     X_train = data_dir["X_train"]
-    days = data_dir["t_train"]
+    t_grid = data_dir["t_train"]
     train_dataset = MnnDataset(
         X=X_train,
-        days=days,
+        t_grid=t_grid,
         batch_size=10,
         device="cpu",
-        skip_day_idx=2,
+        skip_idx=2,
     )
     from torch.utils.data import DataLoader
     dataloader = DataLoader(train_dataset, batch_size=None)
