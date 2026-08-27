@@ -13,6 +13,16 @@ def split_evenly(total: int, n: int) -> list[int]:
     return [per_part] * (n - 1) + [total - per_part * (n - 1)]
 
 
+def to_tensor(X, device):
+    """Cells `X` of shape (n_cells, D) as a float32 tensor on `device`."""
+    return torch.from_numpy(X).float().to(device)
+
+
+def sample_cells(X, n, device):
+    """Draw `n` cells with replacement from `X` (n_cells, D) onto `device`."""
+    return to_tensor(X[np.random.randint(0, X.shape[0], size=n)], device)
+
+
 class TimeFilteredDataset(IterableDataset):
     """
     User gives skip_idx, which is the index of the timepoint to skip.
@@ -63,25 +73,18 @@ class TimeFilteredDataset(IterableDataset):
 
 
 class FlowMatchingDataset(TimeFilteredDataset):
-    def __init__(
-            self,
-            X,
-            flow_matcher,
-            batch_size,
-            device,
-            skip_idx,
-            t_grid,
-            train_on_skip=False
-        ):
-        super().__init__(
-            X=X,
-            t_grid=t_grid,
-            batch_size=batch_size,
-            device=device,
-            skip_idx=skip_idx,
-            train_on_skip=train_on_skip,
-        )
-        self.flow_matcher = flow_matcher
+    """
+    Base for the CFM baselines. Subclasses only pick `flow_matcher_cls`, so every
+    train dataset in this module takes the same constructor keywords.
+    """
+
+    flow_matcher_cls = None
+
+    def __init__(self, *args, sigma=0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.flow_matcher_cls is not None, \
+            f"{type(self).__name__} must set flow_matcher_cls"
+        self.flow_matcher = self.flow_matcher_cls(sigma=sigma)
 
     def __iter__(self):
         while True:
@@ -102,11 +105,8 @@ class FlowMatchingDataset(TimeFilteredDataset):
                 delta_t = t_j - t_i              # e.g. 2
 
                 # Sample random points from x0 and x1
-                idx0 = np.random.randint(0, x0.shape[0], size=self.batch_size)
-                idx1 = np.random.randint(0, x1.shape[0], size=self.batch_size)
-
-                x0_sample = torch.from_numpy(x0[idx0]).float().to(self.device)
-                x1_sample = torch.from_numpy(x1[idx1]).float().to(self.device)
+                x0_sample = sample_cells(x0, self.batch_size, self.device)
+                x1_sample = sample_cells(x1, self.batch_size, self.device)
 
                 # Flow-matching step returns:
                 #   t   \in [0,1]
@@ -136,15 +136,11 @@ class FlowMatchingDataset(TimeFilteredDataset):
 
 
 class IndependentFlowMatchingDataset(FlowMatchingDataset):
-    def __init__(self, *args, **kwargs):
-        flow_matcher = ConditionalFlowMatcher(sigma=0.1)
-        super().__init__(flow_matcher=flow_matcher, *args, **kwargs)
+    flow_matcher_cls = ConditionalFlowMatcher
 
 
 class BatchOTFlowMatchingDataset(FlowMatchingDataset):
-    def __init__(self, *args, **kwargs):
-        flow_matcher = ExactOptimalTransportConditionalFlowMatcher(sigma=0.1)
-        super().__init__(flow_matcher=flow_matcher, *args, **kwargs)
+    flow_matcher_cls = ExactOptimalTransportConditionalFlowMatcher
 
 
 class OTFlowMatchingDataset(FlowMatchingDataset):
@@ -157,10 +153,10 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
     precomputed pairs during iteration.
     """
 
-    def __init__(self, *args, sigma=0.1, **kwargs):
-        # Initialize with a temporary flow_matcher that will be used for precomputation
-        flow_matcher = ExactOptimalTransportConditionalFlowMatcher(sigma=sigma)
-        super().__init__(flow_matcher=flow_matcher, *args, **kwargs)
+    flow_matcher_cls = ExactOptimalTransportConditionalFlowMatcher
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
         # Precompute all optimal transport pairs between consecutive timepoints
         self.precomputed_data = []
@@ -171,8 +167,8 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             x1 = self.X_filtered[i + 1]
 
             # Convert to torch tensors
-            x0_tensor = torch.from_numpy(x0).float().to(self.device)
-            x1_tensor = torch.from_numpy(x1).float().to(self.device)
+            x0_tensor = to_tensor(x0, self.device)
+            x1_tensor = to_tensor(x1, self.device)
 
             # Original integer time labels
             t_i = self.t_grid_filtered[i]
@@ -219,7 +215,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
             for pair_data in self.precomputed_data:
                 # Random sampling from the precomputed data
                 n_points = pair_data['x_t'].shape[0]
-                indices = self.rng.integers(0, n_points, size=self.batch_size)
+                indices = np.random.randint(0, n_points, size=self.batch_size)
 
                 # Extract the sampled data
                 ts_list.append(pair_data['T'][indices])
@@ -249,26 +245,22 @@ class SkipMarginalEvalDataset(IterableDataset):
         self.prev_idx = skip_idx - 1
         self.t_prev = t_grid[self.prev_idx]
 
-        assert self.t_prev <= self.t_skip, f"t_skip {self.t_skip} must be less than or equal to t_prev {self.t_prev}"
+        assert self.t_prev <= self.t_skip, f"t_prev {self.t_prev} must be less than or equal to t_skip {self.t_skip}"
         self.X_t_prev = X[self.prev_idx]
         self.X_t_skip = X[self.skip_idx]
 
         self.device = device
 
+    def _load_marginal(self, X):
+        # batch_size None loads the whole marginal, in order, in a single batch
+        indices = (np.arange(X.shape[0]) if self.batch_size is None
+                   else np.random.randint(0, X.shape[0], size=self.batch_size))
+        return to_tensor(X[indices], self.device)
+
     def __iter__(self):
         while True:
-            if self.batch_size is None:
-                indices_prev = np.arange(self.X_t_prev.shape[0])
-                indices_t_skip = np.arange(self.X_t_skip.shape[0])
-            else:
-                # Batched behavior: sample random indices
-                indices_prev = np.random.randint(0, self.X_t_prev.shape[0], size=self.batch_size)
-                indices_t_skip = np.random.randint(0, self.X_t_skip.shape[0], size=self.batch_size)
-
-            x_t_prev = torch.from_numpy(
-                self.X_t_prev[indices_prev]).float().to(self.device)
-            x_t_skip = torch.from_numpy(
-                self.X_t_skip[indices_t_skip]).float().to(self.device)
+            x_t_prev = self._load_marginal(self.X_t_prev)
+            x_t_skip = self._load_marginal(self.X_t_skip)
 
             t = torch.full((x_t_prev.shape[0],), float(
                 self.t_prev), device=self.device)
@@ -313,11 +305,7 @@ class MnnDataset(TimeFilteredDataset):
         x_ts = []
         t = []
         for i, bs in enumerate(num_samples):
-            cell_indices = np.random.randint(
-                0, self.cells_per_t[i], size=bs)
-            cells = torch.from_numpy(
-                self.X_filtered[i][cell_indices]
-            ).float().to(self.device)
+            cells = sample_cells(self.X_filtered[i], bs, self.device)
             x_ts.append(cells.unsqueeze(1))  # Add time dimension
             t.append(torch.full((bs, 1, 1), float(self.t_grid_filtered[i]),
                                 device=self.device))
@@ -332,10 +320,8 @@ class MnnDataset(TimeFilteredDataset):
         # Sample batch_size points from each time point for population
         x_population = []
         for i in range(len(self.t_indcs)):
-            cell_indices = np.random.randint(
-                0, self.cells_per_t[i], size=self.batch_size)
-            cells = torch.from_numpy(
-                self.X_filtered[i][cell_indices]).float().to(self.device)
+            cells = sample_cells(
+                self.X_filtered[i], self.batch_size, self.device)
             # Add time dimension
             x_population.append(cells.unsqueeze(1))
 
@@ -379,6 +365,14 @@ class MixedDataset(MnnDataset):
         return sum(len(dataset) for dataset in self.datasets)
 
 
+TRAIN_DATASET_BY_METHOD = {
+    "mnn": MnnDataset,
+    "i-cfm": IndependentFlowMatchingDataset,
+    "batch-ot-cfm": BatchOTFlowMatchingDataset,
+    "ot-cfm": OTFlowMatchingDataset,
+}
+
+
 def construct_train_val_datasets(
         ds_name: str,
         skip_idx: int,
@@ -392,20 +386,13 @@ def construct_train_val_datasets(
     X_train = data_dir["X_train"]
     t_grid = data_dir["t_train"]
 
-    assert method in ["ot-cfm", "mnn", "i-cfm", "batch-ot-cfm"], \
-        f"Unrecognized method: {method}. Must be one of ['ot-cfm', 'mnn', 'i-cfm', 'batch-ot-cfm']"
+    if method not in TRAIN_DATASET_BY_METHOD:
+        raise ValueError(
+            f"Unrecognized method: {method}. "
+            f"Must be one of {sorted(TRAIN_DATASET_BY_METHOD)}"
+        )
+    ds_constructor = TRAIN_DATASET_BY_METHOD[method]
 
-    if method == "ot-cfm":
-        ds_constructor = OTFlowMatchingDataset
-    elif method == "mnn":
-        ds_constructor = MnnDataset
-    elif method == "i-cfm":
-        ds_constructor = IndependentFlowMatchingDataset
-    elif method == "batch-ot-cfm":
-        ds_constructor = BatchOTFlowMatchingDataset
-    else:
-        raise ValueError(f"Unknown method: {method}")
-    
     train_dataset = ds_constructor(
         X=X_train,
         t_grid=t_grid,
