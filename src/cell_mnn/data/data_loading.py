@@ -6,6 +6,13 @@ from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalF
 from einops import repeat
 from .data_preprocessing import get_data
 
+
+def split_evenly(total: int, n: int) -> list[int]:
+    """Split `total` into `n` counts that sum to `total`; the last absorbs the remainder."""
+    per_part = total // n
+    return [per_part] * (n - 1) + [total - per_part * (n - 1)]
+
+
 class FlowMatchingDataset(IterableDataset):
     """
     An IterableDataset that, on each iteration, samples from all
@@ -330,39 +337,29 @@ class MnnDataset(IterableDataset):
 
     def __iter__(self):
         while True:
+            # Rows are grouped by the initial condition's day. The loss sums over
+            # per-row masks, so it does not depend on the order of the rows.
             x_t, t = self._sample_batch_from_all_days()
-
             x_population, t_population = self._sample_population()
-
-            # shuffle the batch
-            perm = torch.randperm(self.batch_size, device=self.device)
-            x_t = x_t[perm]
-            t = t[perm]
-            x_population = x_population[perm]
-            t_population = t_population[perm]
             yield x_t, t, x_population, t_population
 
     def _sample_batch_from_all_days(self):
-        per_day_samples = self.batch_size // (self.last_sample_day_idx + 1)
-        last_day_num_samples = self.batch_size - \
-            per_day_samples * self.last_sample_day_idx
+        # The final day cannot serve as an initial condition: no later marginal
+        # is left to supervise its trajectory.
+        num_source_days = self.last_sample_day_idx + 1
+        num_samples = split_evenly(self.batch_size, num_source_days)
 
-        # Create x_population with samples from all time points
         x_ts = []
         t = []
-        for i in range(len(self.day_indices)):
-            # Sample points from each time point for initial condition
-            is_valid_train_input = (i <= self.last_sample_day_idx)
-            bs = per_day_samples if i != self.last_sample_day_idx else last_day_num_samples
-            if is_valid_train_input:
-                cell_indices = np.random.randint(
-                    0, self.cells_per_day[i], size=bs)
-                cells = torch.from_numpy(
-                    self.X_filtered[i][cell_indices]
-                ).float().to(self.device)
-                x_ts.append(cells.unsqueeze(1))  # Add time dimension
-                t.append(torch.full((bs, 1, 1), float(self.days_filtered[i]),
-                                    device=self.device))
+        for i, bs in enumerate(num_samples):
+            cell_indices = np.random.randint(
+                0, self.cells_per_day[i], size=bs)
+            cells = torch.from_numpy(
+                self.X_filtered[i][cell_indices]
+            ).float().to(self.device)
+            x_ts.append(cells.unsqueeze(1))  # Add time dimension
+            t.append(torch.full((bs, 1, 1), float(self.days_filtered[i]),
+                                device=self.device))
 
         # Concatenate x_ts along the batch dimension
         x_t = torch.cat(x_ts, dim=0)
