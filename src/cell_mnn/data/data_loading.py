@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+from typing import Any
+
 import torch
 import numpy as np
 
@@ -13,17 +16,17 @@ def split_evenly(total: int, n: int) -> list[int]:
     return [per_part] * (n - 1) + [total - per_part * (n - 1)]
 
 
-def to_tensor(X, device):
+def to_tensor(X: np.ndarray, device: torch.device | str) -> torch.Tensor:
     """Cells `X` of shape (n_cells, D) as a float32 tensor on `device`."""
     return torch.from_numpy(X).float().to(device)
 
 
-def sample_cells(X, n, device):
+def sample_cells(X: np.ndarray, n: int, device: torch.device | str) -> torch.Tensor:
     """Draw `n` cells with replacement from `X` (n_cells, D) onto `device`."""
     return to_tensor(X[np.random.randint(0, X.shape[0], size=n)], device)
 
 
-def assert_valid_skip_idx(skip_idx, n_times):
+def assert_valid_skip_idx(skip_idx: int, n_times: int) -> None:
     assert 1 <= skip_idx <= n_times - 1, "skip_idx must be in [1, n_times - 1]"
 
 
@@ -39,13 +42,13 @@ class TimeFilteredDataset(IterableDataset):
 
     def __init__(
             self,
-            X,
-            t_grid,
-            batch_size,
-            device,
-            skip_idx,
-            train_on_skip=False
-        ):
+            X: list[np.ndarray],
+            t_grid: list[float],
+            batch_size: int,
+            device: torch.device | str,
+            skip_idx: int,
+            train_on_skip: bool = False
+        ) -> None:
         super().__init__()
 
         self.n_times = len(X)
@@ -70,7 +73,7 @@ class TimeFilteredDataset(IterableDataset):
         self.batch_size = batch_size
         self.device = device
 
-    def __len__(self):
+    def __len__(self) -> int:
         # heuristic decision: set number of batches per epoch equal to same number required to seeing each cell measurement once
         return int(sum(self.cells_per_t) / self.batch_size)
 
@@ -83,20 +86,26 @@ class FlowMatchingDataset(TimeFilteredDataset):
 
     flow_matcher_cls: type[ConditionalFlowMatcher] | None = None
 
-    def __init__(self, *args, sigma=0.1, **kwargs):
+    def __init__(self, *args: Any, sigma: float = 0.1, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         assert self.flow_matcher_cls is not None, \
             f"{type(self).__name__} must set flow_matcher_cls"
         self.flow_matcher = self.flow_matcher_cls(sigma=sigma)
 
-    def _pair(self, i):
+    def _pair(self, i: int) -> tuple[np.ndarray, np.ndarray, float, float]:
         # Consecutive pair in the *filtered* grid: if skip_idx=3, t_indcs might be
         # [0,1,2,4,5], so the pairs are (0->1), (1->2), (2->4), (4->5).
         t_i = self.t_grid_filtered[i]      # e.g. 2
         t_j = self.t_grid_filtered[i + 1]  # e.g. 4
         return self.X_filtered[i], self.X_filtered[i + 1], t_i, t_j - t_i
 
-    def _flow_sample(self, x0, x1, t_i, delta_t):
+    def _flow_sample(
+            self,
+            x0: torch.Tensor,
+            x1: torch.Tensor,
+            t_i: float,
+            delta_t: float
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Flow-matching step returns:
         #   t   \in [0,1]
         #   x_t = (1-t)*x0 + t*x1 + noise
@@ -111,7 +120,7 @@ class FlowMatchingDataset(TimeFilteredDataset):
         #    if delta_t=2, then velocity = (x1 - x0) / 2
         return x_t, t_i + delta_t * t, u_t / delta_t
 
-    def _sample_pair(self, i):
+    def _sample_pair(self, i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """One (x_t, T, u_t) batch for the i-th consecutive pair of marginals."""
         x0, x1, t_i, delta_t = self._pair(i)
         return self._flow_sample(
@@ -121,12 +130,13 @@ class FlowMatchingDataset(TimeFilteredDataset):
             delta_t,
         )
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         n_pairs = len(self.X_filtered) - 1
         while True:
             per_pair = [self._sample_pair(i) for i in range(n_pairs)]
             # Concatenate across pairs
-            yield tuple(torch.cat(parts, dim=0) for parts in zip(*per_pair))
+            x_t, T, u_t = (torch.cat(parts, dim=0) for parts in zip(*per_pair))
+            yield x_t, T, u_t
 
 
 class IndependentFlowMatchingDataset(FlowMatchingDataset):
@@ -149,7 +159,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 
     flow_matcher_cls = ExactOptimalTransportConditionalFlowMatcher
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
         print("Precomputing optimal transport pairs...")
@@ -172,14 +182,21 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 
         print(f"Precomputation completed for {len(self.precomputed_pairs)} consecutive timepoint pairs")
 
-    def _sample_pair(self, i):
+    def _sample_pair(self, i: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x_t, T, u_t = self.precomputed_pairs[i]
         indices = np.random.randint(0, x_t.shape[0], size=self.batch_size)
         return x_t[indices], T[indices], u_t[indices]
 
 
 class SkipMarginalEvalDataset(IterableDataset):
-    def __init__(self, X, t_grid, device, skip_idx, batch_size=None):
+    def __init__(
+            self,
+            X: list[np.ndarray],
+            t_grid: list[float],
+            device: torch.device | str,
+            skip_idx: int,
+            batch_size: int | None = None
+        ) -> None:
         super().__init__()
         self.n_times = len(X)
 
@@ -198,13 +215,13 @@ class SkipMarginalEvalDataset(IterableDataset):
 
         self.device = device
 
-    def _load_marginal(self, X):
+    def _load_marginal(self, X: np.ndarray) -> torch.Tensor:
         # batch_size None loads the whole marginal, in order, in a single batch
         indices = (np.arange(X.shape[0]) if self.batch_size is None
                    else np.random.randint(0, X.shape[0], size=self.batch_size))
         return to_tensor(X[indices], self.device)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]]:
         while True:
             x_t_prev = self._load_marginal(self.X_t_prev)
             x_t_skip = self._load_marginal(self.X_t_skip)
@@ -214,7 +231,7 @@ class SkipMarginalEvalDataset(IterableDataset):
 
             yield (x_t_prev, t, x_t_skip, self.t_skip)
 
-    def __len__(self):
+    def __len__(self) -> int:
         if self.batch_size is None:
             # Original behavior: everything is loaded in one batch
             return 1
@@ -224,7 +241,7 @@ class SkipMarginalEvalDataset(IterableDataset):
 
 
 class MnnDataset(TimeFilteredDataset):
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         while True:
             # Rows are grouped by the initial condition's timepoint. The loss sums over
             # per-row masks, so it does not depend on the order of the rows.
@@ -232,7 +249,7 @@ class MnnDataset(TimeFilteredDataset):
             x_population, t_population = self._sample_population()
             yield x_t, t, x_population, t_population
 
-    def _sample_batch_from_all_times(self):
+    def _sample_batch_from_all_times(self) -> tuple[torch.Tensor, torch.Tensor]:
         # The final timepoint cannot serve as an initial condition: no later marginal
         # is left to supervise its trajectory.
         num_source_times = len(self.t_indcs) - 1
@@ -252,7 +269,7 @@ class MnnDataset(TimeFilteredDataset):
         assert x_t.shape[0] == self.batch_size, f"Expected {self.batch_size} cells, got {x_t.shape[0]}"
         return x_t, t
 
-    def _sample_population(self):
+    def _sample_population(self) -> tuple[torch.Tensor, torch.Tensor]:
         # Sample batch_size points from each time point for population
         x_population = []
         for i in range(len(self.t_indcs)):
@@ -287,7 +304,7 @@ def get_datasets(
         method: str,
         val_prop: float = 0.0,
         train_on_all_times: bool = False
-    ):
+    ) -> tuple[TimeFilteredDataset, SkipMarginalEvalDataset]:
     """(train_dataset, val_dataset) for `ds_name`, holding out marginal `skip_idx`."""
     data_dir = get_data(ds_name=ds_name, val_prop=val_prop)
     X_train = data_dir["X_train"]
