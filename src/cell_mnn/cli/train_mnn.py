@@ -1,3 +1,5 @@
+from typing import Optional, Sequence
+
 from cell_mnn.model import CellMNN
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
 from cell_mnn.data.data_loading import build_datasets
@@ -16,7 +18,7 @@ import uuid
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"   # force determinism
 
 # Parse command-line arguments
-def parse_args(argv=None):
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Train an MNN prediction model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
@@ -61,7 +63,7 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     fix_seed(args.seed, use_det_algos=False)
     use_cuda = True

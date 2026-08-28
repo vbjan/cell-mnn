@@ -1,6 +1,7 @@
 import numpy as np
 import datetime
 import os
+from typing import Optional, Sequence, Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,7 +22,7 @@ from cell_mnn.utils import save_hyperparams_to_json, fix_seed
 
 
 # Parse command-line arguments
-def parse_args(argv=None):
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Train a Flow Matching model on embryoid data')
     parser.add_argument('--epochs', type=int, default=1000,
@@ -58,7 +59,13 @@ class CFMVelocityMLP(torch.nn.Module):
     generic MLP.
     """
 
-    def __init__(self, dim, out_dim=None, w=64, time_varying=False):
+    def __init__(
+            self, 
+            dim: int, 
+            out_dim: Optional[int] = None, 
+            w: int = 64,
+            time_varying: bool = False
+        ) -> None:
         super().__init__()
         self.time_varying = time_varying
         if out_dim is None:
@@ -70,12 +77,19 @@ class CFMVelocityMLP(torch.nn.Module):
             torch.nn.Linear(w, out_dim),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
 class FlowMatchingModel(pl.LightningModule):
-    def __init__(self, dim, skip_idx, t_grid, lr, w=64):
+    def __init__(
+            self,
+            dim: int,
+            skip_idx: int,
+            t_grid: Sequence[float],
+            lr: float,
+            w: int = 64
+        ) -> None:
         super().__init__()
         self.ot_cfm_model = CFMVelocityMLP(dim=dim, time_varying=True, w=64)
         self.node = NeuralODE(torch_wrapper(
@@ -90,25 +104,38 @@ class FlowMatchingModel(pl.LightningModule):
         self.dt = 0.01
         self.mmd_loss = MMDLoss(sigma=1.0)
 
-    def forward(self, obs):
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
         vt = self.ot_cfm_model(obs)  # obs contains both x and t here
         return vt
 
-    def training_step(self, batch, batch_idx):
+    def training_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            batch_idx: int
+        ) -> torch.Tensor:
         xt, t, ut = batch
         vt = self.forward(torch.cat([xt, t.unsqueeze(-1)], dim=-1))
         loss = torch.mean((vt - ut) ** 2)
         self.log("train_loss", loss)
         return loss
 
-    def in_distribution_validation_step(self, batch, batch_idx):
+    def in_distribution_validation_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            batch_idx: int
+        ) -> torch.Tensor:
         xt, t, ut = batch
         vt = self.forward(torch.cat([xt, t.unsqueeze(-1)], dim=-1))
         loss = torch.mean((vt - ut) ** 2)
         self.log("val_loss", loss)
         return loss
 
-    def validation_step(self, batch, batch_idx, num_iter_max=200_000):
+    def validation_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+            batch_idx: int,
+            num_iter_max: int = 200_000
+        ) -> float:
         x_t_prev, t, x_t_skip, _ = batch
         t_span = torch.arange(self.t_prev, self.t_skip + self.dt, self.dt)
         traj = self.node.trajectory(
@@ -129,17 +156,21 @@ class FlowMatchingModel(pl.LightningModule):
 
         return emd
 
-    def test_step(self, batch, batch_idx):
+    def test_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+            batch_idx: int
+        ) -> float:
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(self.ot_cfm_model.parameters(),
                                       self.lr,
                                       weight_decay=1e-5)
         return optimizer
 
 
-def main(argv=None):
+def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     fix_seed(args.seed, use_det_algos=False)
 
