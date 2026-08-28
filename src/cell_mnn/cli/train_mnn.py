@@ -15,8 +15,6 @@ import os
 import json
 import uuid
 
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"   # force determinism
-
 # Parse command-line arguments
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(

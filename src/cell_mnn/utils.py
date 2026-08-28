@@ -12,6 +12,9 @@ def fix_seed(
     use_det_algos: bool = False
 ):
     pl.seed_everything(seed, workers=True)           # Lightning helper
+    if use_det_algos:
+        # must be set before any cuBLAS call for deterministic algorithms to work
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     torch.use_deterministic_algorithms(use_det_algos)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = use_det_algos
