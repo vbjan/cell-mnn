@@ -1,5 +1,6 @@
 import numpy as np
 
+from ..checks import require
 from .marginals import TimeSeriesMarginals
 
 
@@ -12,10 +13,8 @@ def zscore(marginals: TimeSeriesMarginals) -> TimeSeriesMarginals:
     mean = pooled.mean(axis=0)
     std = pooled.std(axis=0)
 
-    # check for constant feature with zero variance
     constant = np.flatnonzero(std == 0).tolist()
-    if constant:
-        raise ValueError(f"{marginals.name}: features {constant} are constant")
+    require(not constant, f"{marginals.name}: features {constant} are constant")
 
     return TimeSeriesMarginals(
         X=[(x - mean) / std for x in marginals.X],

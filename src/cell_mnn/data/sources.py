@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
+from ..checks import require, require_key
 from .marginals import TimeSeriesMarginals
 from .transforms import zscore
 
@@ -37,21 +38,14 @@ def marginals_from_flat(
     """
     Group flat per-cell observations into one marginal per unique time.
     """
-    if coords.ndim != 2:
-        raise ValueError(
+    require(coords.ndim == 2,
             f"{name}: embedding must be 2D (n_cells, n_components), got {coords.ndim}D")
-
-    if coords.shape[1] < n_features:
-        raise ValueError(
+    require(coords.shape[1] >= n_features,
             f"{name}: requested {n_features} features but the embedding only has "
             f"{coords.shape[1]} components")
-
-    if t_values.ndim != 1:
-        raise ValueError(
+    require(t_values.ndim == 1,
             f"{name}: time labels must be 1D (n_cells,), got {t_values.ndim}D")
-
-    if t_values.shape[0] != coords.shape[0]:
-        raise ValueError(
+    require(t_values.shape[0] == coords.shape[0],
             f"{name}: {coords.shape[0]} cells in the embedding but "
             f"{t_values.shape[0]} time labels")
 
@@ -84,17 +78,13 @@ def marginals_from_anndata(
             category order carries the time order and the values do not parse as
             numbers.
     """
-    if time_key not in adata.obs:
-        raise KeyError(
-            f"{name}: obs has no column {time_key!r}; available: {list(adata.obs)}")
-
-    if embedding_key not in adata.obsm:
-        raise KeyError(
-            f"{name}: obsm has no key {embedding_key!r}; available: {list(adata.obsm)}")
+    require_key(time_key, adata.obs, f"{name}: obs")
+    require_key(embedding_key, adata.obsm, f"{name}: obsm")
 
     labels = adata.obs[time_key]
 
     if use_codes:
+        # Not `require`: this one is a TypeError, not a bad value.
         if not hasattr(labels, "cat"):
             raise TypeError(
                 f"{name}: use_codes requires obs[{time_key!r}] to be categorical, "
@@ -142,11 +132,8 @@ class NpzSource:
 
     def load(self, n_features: int, name: str) -> TimeSeriesMarginals:
         with np.load(self.path) as npz:
-            for key in (self.time_key, self.embedding_key):
-                if key not in npz:
-                    raise KeyError(
-                        f"{name}: {self.path} has no array {key!r}; "
-                        f"available: {list(npz)}")
+            require_key(self.time_key, npz, f"{name}: {self.path}")
+            require_key(self.embedding_key, npz, f"{name}: {self.path}")
 
             coords = np.asarray(npz[self.embedding_key])
             t_values = np.asarray(npz[self.time_key])
@@ -169,26 +156,23 @@ DEFAULT_CONFIG_PATH = Path("datasets.toml")
 
 def _source_from_spec(spec: object, ds_name: str, root: Path) -> MarginalSource:
     """One `[ds_name]` table from the config file as a source object."""
+    at = f"dataset {ds_name!r}"
+
+    # Not `require`: a call cannot narrow `spec` from `object` to `dict` for a
+    # type checker, and everything below depends on that narrowing.
     if not isinstance(spec, dict):
-        raise ValueError(
-            f"dataset {ds_name!r}: expected a [{ds_name}] table, "
-            f"got {type(spec).__name__}")
+        raise ValueError(f"{at}: expected a [{ds_name}] table, got {type(spec).__name__}")
 
     spec = dict(spec)  # the parsed config is the caller's; don't mutate it
 
-    if "type" not in spec:
-        raise ValueError(
-            f"dataset {ds_name!r}: missing 'type'; "
-            f"must be one of {sorted(SOURCE_TYPES)}")
+    require("type" in spec,
+            f"{at}: missing 'type'; must be one of {sorted(SOURCE_TYPES)}")
 
     type_name = spec.pop("type")
-    if type_name not in SOURCE_TYPES:
-        raise ValueError(
-            f"dataset {ds_name!r}: unknown type {type_name!r}; "
-            f"must be one of {sorted(SOURCE_TYPES)}")
+    require(type_name in SOURCE_TYPES,
+            f"{at}: unknown type {type_name!r}; must be one of {sorted(SOURCE_TYPES)}")
 
-    if "path" not in spec:
-        raise ValueError(f"dataset {ds_name!r}: missing 'path'")
+    require("path" in spec, f"{at}: missing 'path'")
 
     # Relative to the config file rather than the cwd, so a config and its data
     # move together and training can be launched from any directory. An absolute
@@ -200,7 +184,7 @@ def _source_from_spec(spec: object, ds_name: str, root: Path) -> MarginalSource:
     except TypeError as err:
         # The reader's signature is the schema -- surface its complaint verbatim,
         # which names the offending key.
-        raise ValueError(f"dataset {ds_name!r}: {err}") from None
+        raise ValueError(f"{at}: {err}") from None
 
 
 def load_marginals(
@@ -235,8 +219,7 @@ def load_marginals(
     except tomllib.TOMLDecodeError as err:
         raise ValueError(f"{config_path}: {err}") from None
 
-    if ds_name not in specs:
-        raise ValueError(
+    require(ds_name in specs,
             f"dataset {ds_name!r} not in {config_path}; available: {sorted(specs)}")
 
     source = _source_from_spec(specs[ds_name], ds_name, root=config_path.parent)

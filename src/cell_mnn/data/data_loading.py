@@ -7,6 +7,7 @@ import numpy as np
 from torch.utils.data import IterableDataset
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from einops import repeat
+from ..checks import require
 from .sources import load_marginals
 from .marginals import TimeSeriesMarginals
 
@@ -286,11 +287,9 @@ def build_datasets(
     """
     (train_dataset, val_dataset) for `marginals`, holding out marginal `skip_idx`.
     """
-    if method not in TRAIN_DATASET_BY_METHOD:
-        raise ValueError(
+    require(method in TRAIN_DATASET_BY_METHOD,
             f"Unrecognized method: {method}. "
-            f"Must be one of {sorted(TRAIN_DATASET_BY_METHOD)}"
-        )
+            f"Must be one of {sorted(TRAIN_DATASET_BY_METHOD)}")
     ds_constructor = TRAIN_DATASET_BY_METHOD[method]
 
     train_dataset = ds_constructor(
