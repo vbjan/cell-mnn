@@ -11,7 +11,8 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from torch.utils.data import DataLoader
-from cell_mnn.data.data_loading import get_datasets
+from cell_mnn.data.data_loading import build_datasets
+from cell_mnn.data.data_preprocessing import load_marginals
 from torchdyn.core import NeuralODE
 from torchcfm.utils import torch_wrapper
 
@@ -143,14 +144,15 @@ def main(argv=None):
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     sigma = 0.1
-    latent_dim = 5
     lr = 1e-3
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     # Instantiate the dataset
-    train_dataset, val_dataset = get_datasets(
-        ds_name=args.ds_name,
+    marginals = load_marginals(ds_name=args.ds_name)
+    latent_dim = marginals.n_features
+    train_dataset, val_dataset = build_datasets(
+        marginals,
         skip_idx=args.skip_idx,
         train_on_all_times=False,
         method=args.method,
@@ -167,7 +169,7 @@ def main(argv=None):
         dim=latent_dim,
         skip_idx=args.skip_idx,
         lr=lr,
-        t_grid=train_dataset.t_grid,
+        t_grid=marginals.t_grid,
     ).to(device)
     model_name = f"{args.method}_5-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
 
@@ -233,7 +235,7 @@ def main(argv=None):
                                                             dim=latent_dim,
                                                             skip_idx=args.skip_idx,
                                                             lr=1e-4,
-                                                            t_grid=train_dataset.t_grid)
+                                                            t_grid=marginals.t_grid)
 
     # Evaluate the best model on the test dataset
     print("\nEvaluating best model on test dataset...")

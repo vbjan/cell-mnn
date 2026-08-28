@@ -1,53 +1,33 @@
 import numpy as np
 import scanpy as sc
 
-
-def split_train_val_indices(n_cells, val_prop):
-    """
-    Split data indices into training and validation sets.
-
-    Args:
-        n_cells (int): Number of cells to split.
-        val_prop (float): Proportion of cells to use for validation.
-
-    Returns:
-        tuple: (training indices, validation indices)
-    """
-    val_size = int(n_cells * val_prop)
-    perm = np.random.permutation(n_cells)
-
-    val_idx = perm[:val_size]
-    trn_idx = perm[val_size:]
-
-    return trn_idx, val_idx
+from .marginals import TimeSeriesMarginals
 
 
-def get_data(val_prop=0., ds_name="embryoid", pca_dims=5):
+def load_marginals(ds_name: str = "embryoid", pca_dims: int = 5) -> TimeSeriesMarginals:
     if ds_name == "embryoid_less_preprocessed":
         adata = sc.read_h5ad('data/ebdata/ebdata_v3_recomputed_pca.h5ad')
-        t_grid = range(len(adata.obs["sample_labels"].unique()))
+        t_labels = range(len(adata.obs["sample_labels"].unique()))
     elif ds_name == "embryoid":
         adata = np.load('data/ebdata/eb_velocity_v5.npz')
-        t_grid = np.unique(adata["sample_labels"]) 
+        t_labels = np.unique(adata["sample_labels"]) 
     elif ds_name == "embryoid_inflated":
         adata = sc.read_h5ad('data/ebdata/eb_velocity_v5_inflated.h5ad')
-        t_grid = adata.obs['sample_labels'].unique()
+        t_labels = adata.obs['sample_labels'].unique()
     elif ds_name == "cite":
         adata = sc.read_h5ad('data/citedata/op_cite_inputs_0.h5ad')
-        t_grid = adata.obs['day'].unique()
+        t_labels = adata.obs['day'].unique()
     elif ds_name == "cite_inflated":
         adata = sc.read_h5ad('data/citedata/op_cite_inputs_0_inflated.h5ad')
-        t_grid = adata.obs['day'].unique()
+        t_labels = adata.obs['day'].unique()
     elif ds_name == "multi":
         adata = sc.read_h5ad('data/multidata/op_train_multi_targets_0.h5ad')
-        t_grid = adata.obs['day'].unique()
+        t_labels = adata.obs['day'].unique()
     elif ds_name == "multi_inflated":
         adata = sc.read_h5ad('data/multidata/op_train_multi_targets_0_inflated.h5ad')
-        t_grid = adata.obs['day'].unique()
+        t_labels = adata.obs['day'].unique()
     else:
         raise ValueError(f"Dataset {ds_name} not recognized.")
-    
-    t_grid = sorted(t_grid)
 
     if isinstance(adata, np.lib.npyio.NpzFile):
         X_pca = adata["pcs"]
@@ -63,14 +43,11 @@ def get_data(val_prop=0., ds_name="embryoid", pca_dims=5):
     coords = X_pca[:, :pca_dims]
     coords = (coords - coords.mean(axis=0)) / coords.std(axis=0)
 
-    X_train, X_val = [], []
-    t_train, t_val = [], []
-    idx_train, idx_val = [], []
-
-    for t in t_grid:
+    X = []
+    for t in t_labels:
         if ds_name == "embryoid_less_preprocessed":  # selection logic needs to be dataset-specific due to different naming
             mask_t = adata.obs["sample_labels"].cat.codes == t
-        elif ds_name in ["cite", "multi", "synthetic", "cite_inflated", "multi_inflated"]:
+        elif ds_name in ["cite", "multi", "cite_inflated", "multi_inflated"]:
             mask_t = adata.obs["day"] == t
         elif ds_name == "embryoid":
             mask_t = adata["sample_labels"] == t
@@ -79,36 +56,15 @@ def get_data(val_prop=0., ds_name="embryoid", pca_dims=5):
         else:
             raise ValueError(f"Dataset {ds_name} not recognized for time selection.")
 
-        # original obs indices (ordered)
-        time_idx = np.where(mask_t)[0]
-        time_data = coords[mask_t]
+        X.append(coords[mask_t])
 
-        n_cells = time_data.shape[0]
-        trn_idx, val_idx = split_train_val_indices(n_cells, val_prop)
+    t_labels = sorted(t_labels)
+    t_grid: list[float] = [float(t) for t in t_labels]  
 
-        X_train.append(time_data[trn_idx])
-        X_val.append(time_data[val_idx])
-
-        t_train.append(t)
-        t_val.append(t)
-
-        idx_train.append(time_idx[trn_idx])
-        idx_val.append(time_idx[val_idx])
-
-    return {
-        'X_train': X_train,
-        'X_val': X_val,
-        't_train': t_train,
-        't_val': t_val,
-        'idx_train': idx_train,
-        'idx_val': idx_val
-    }
+    return TimeSeriesMarginals(X=X, t_grid=t_grid, name=ds_name)
 
 
 if __name__ == "__main__":
-    data = get_data(ds_name="multi", val_prop=0.2)
+    marginals = load_marginals(ds_name="multi")
     print("Data preprocessing complete.")
-    print(f"Train data shape: {[x.shape for x in data['X_train']]}")
-    print(f"Validation data shape: {[x.shape for x in data['X_val']]}")
-    print(f"Train time labels: {data['t_train']}")
-    print(f"Validation time labels: {data['t_val']}")
+    print(marginals)

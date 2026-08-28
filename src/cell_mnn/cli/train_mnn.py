@@ -1,6 +1,7 @@
 from cell_mnn.model import CellMNN
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
-from cell_mnn.data.data_loading import get_datasets
+from cell_mnn.data.data_loading import build_datasets
+from cell_mnn.data.data_preprocessing import load_marginals
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pytorch_lightning as pl
@@ -66,16 +67,16 @@ def main(argv=None):
 
     uid = str(uuid.uuid4())
 
-    train_dataset, val_dataset = get_datasets(
-        ds_name=args.ds_name,
+    marginals = load_marginals(ds_name=args.ds_name)
+    train_dataset, val_dataset = build_datasets(
+        marginals,
         skip_idx=args.skip_idx,
         batch_size=args.batch_size,
         device=device,
-        val_prop=0.0,
         train_on_all_times=args.train_on_all_times,
         method="mnn",
     )
-    latent_dim = train_dataset.latent_dim
+    latent_dim = marginals.n_features
     dataloader = DataLoader(train_dataset, batch_size=None)
     val_loader = DataLoader(val_dataset, batch_size=None)
 

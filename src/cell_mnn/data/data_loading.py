@@ -7,7 +7,8 @@ import numpy as np
 from torch.utils.data import IterableDataset
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from einops import repeat
-from .data_preprocessing import get_data
+from .data_preprocessing import load_marginals
+from .marginals import TimeSeriesMarginals
 
 
 def split_evenly(total: int, n: int) -> list[int]:
@@ -32,18 +33,16 @@ def assert_valid_skip_idx(skip_idx: int, n_times: int) -> None:
 
 class TimeFilteredDataset(IterableDataset):
     """
-    User gives skip_idx, which is the index of the timepoint to skip.
+    Base for every training dataset: holds out the marginal at `skip_idx`.
 
-    Datastructure:
-    - t_indcs for navigating through timepoints and cells as range [0, n_times)
-    - X_filtered: list of numpy arrays, one per timepoint, excluding the skipped one
-    - t_grid_filtered: list of times corresponding to the acquisition times of each component of X_filtered (no t_skip)
+    Only the surviving timepoints are kept, as `train_marginals` -- the incoming series
+    without `skip_idx`, or all of it when `train_on_skip` is set. `t_skip` is retained
+    separately because the metric key both callbacks monitor is built from it.
     """
 
     def __init__(
             self,
-            X: list[np.ndarray],
-            t_grid: list[float],
+            marginals: TimeSeriesMarginals,
             batch_size: int,
             device: torch.device | str,
             skip_idx: int,
@@ -51,31 +50,18 @@ class TimeFilteredDataset(IterableDataset):
         ) -> None:
         super().__init__()
 
-        self.n_times = len(X)
-        self.t_grid = t_grid
+        assert_valid_skip_idx(skip_idx, marginals.n_times)
+
         self.skip_idx = skip_idx
-        self.t_skip = t_grid[skip_idx]
-        self.train_on_skip = train_on_skip
-        self.latent_dim = X[0].shape[-1]
-        assert_valid_skip_idx(self.skip_idx, self.n_times)
-
-        # Filter out the timepoint we want to skip
-        if self.train_on_skip:
-            self.t_indcs = range(self.n_times)
-        else:
-            self.t_indcs = [i for i in range(self.n_times) if i != self.skip_idx]
-
-        self.t_grid_filtered = [t_grid[i] for i in self.t_indcs]
-        self.X_filtered = [X[i] for i in self.t_indcs]
-
-        self.cells_per_t = [x.shape[0] for x in self.X_filtered]
+        self.t_skip = marginals.t_grid[skip_idx]
+        self.train_marginals = marginals if train_on_skip else marginals.drop(skip_idx)
 
         self.batch_size = batch_size
         self.device = device
 
     def __len__(self) -> int:
         # heuristic decision: set number of batches per epoch equal to same number required to seeing each cell measurement once
-        return int(sum(self.cells_per_t) / self.batch_size)
+        return int(self.train_marginals.n_cells / self.batch_size)
 
 
 class FlowMatchingDataset(TimeFilteredDataset):
@@ -93,11 +79,11 @@ class FlowMatchingDataset(TimeFilteredDataset):
         self.flow_matcher = self.flow_matcher_cls(sigma=sigma)
 
     def _pair(self, i: int) -> tuple[np.ndarray, np.ndarray, float, float]:
-        # Consecutive pair in the *filtered* grid: if skip_idx=3, t_indcs might be
-        # [0,1,2,4,5], so the pairs are (0->1), (1->2), (2->4), (4->5).
-        t_i = self.t_grid_filtered[i]      # e.g. 2
-        t_j = self.t_grid_filtered[i + 1]  # e.g. 4
-        return self.X_filtered[i], self.X_filtered[i + 1], t_i, t_j - t_i
+        # Consecutive pair in the *surviving* grid: if skip_idx=3, the supervised
+        # timepoints might be [0,1,2,4,5], so the pairs are (0->1), (1->2), (2->4), (4->5).
+        x0, t_i = self.train_marginals[i]      # e.g. t_i = 2
+        x1, t_j = self.train_marginals[i + 1]  # e.g. t_j = 4
+        return x0, x1, t_i, t_j - t_i
 
     def _flow_sample(
             self,
@@ -131,7 +117,7 @@ class FlowMatchingDataset(TimeFilteredDataset):
         )
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        n_pairs = len(self.X_filtered) - 1
+        n_pairs = self.train_marginals.n_times - 1
         while True:
             per_pair = [self._sample_pair(i) for i in range(n_pairs)]
             # Concatenate across pairs
@@ -164,7 +150,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 
         print("Precomputing optimal transport pairs...")
         self.precomputed_pairs = []
-        for i in range(len(self.X_filtered) - 1):
+        for i in range(self.train_marginals.n_times - 1):
             x0, x1, t_i, delta_t = self._pair(i)
             print(f"  Processing time pair {t_i}->{t_i + delta_t} with "
                   f"{x0.shape[0]} source points and {x1.shape[0]} target points")
@@ -191,27 +177,21 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
 class SkipMarginalEvalDataset(IterableDataset):
     def __init__(
             self,
-            X: list[np.ndarray],
-            t_grid: list[float],
+            marginals: TimeSeriesMarginals,
             device: torch.device | str,
             skip_idx: int,
             batch_size: int | None = None
         ) -> None:
         super().__init__()
-        self.n_times = len(X)
+
+        assert_valid_skip_idx(skip_idx, marginals.n_times)
 
         self.skip_idx = skip_idx
-        assert_valid_skip_idx(self.skip_idx, self.n_times)
-        self.t_skip = t_grid[self.skip_idx]
         self.batch_size = batch_size
 
-        # Predict distribution at t_skip from previous timepoint
-        self.prev_idx = skip_idx - 1
-        self.t_prev = t_grid[self.prev_idx]
-
-        assert self.t_prev <= self.t_skip, f"t_prev {self.t_prev} must be less than or equal to t_skip {self.t_skip}"
-        self.X_t_prev = X[self.prev_idx]
-        self.X_t_skip = X[self.skip_idx]
+        # Predict the distribution at t_skip from the previous timepoint.
+        self.X_t_skip, self.t_skip = marginals[skip_idx]
+        self.X_t_prev, self.t_prev = marginals[skip_idx - 1]
 
         self.device = device
 
@@ -252,16 +232,16 @@ class MnnDataset(TimeFilteredDataset):
     def _sample_batch_from_all_times(self) -> tuple[torch.Tensor, torch.Tensor]:
         # The final timepoint cannot serve as an initial condition: no later marginal
         # is left to supervise its trajectory.
-        num_source_times = len(self.t_indcs) - 1
+        num_source_times = self.train_marginals.n_times - 1
         num_samples = split_evenly(self.batch_size, num_source_times)
 
         x_ts = []
         t = []
         for i, bs in enumerate(num_samples):
-            cells = sample_cells(self.X_filtered[i], bs, self.device)
+            x_i, t_i = self.train_marginals[i]
+            cells = sample_cells(x_i, bs, self.device)
             x_ts.append(cells.unsqueeze(1))  # Add time dimension
-            t.append(torch.full((bs, 1, 1), float(self.t_grid_filtered[i]),
-                                device=self.device))
+            t.append(torch.full((bs, 1, 1), t_i, device=self.device))
 
         # Concatenate x_ts along the batch dimension
         x_t = torch.cat(x_ts, dim=0)
@@ -271,17 +251,16 @@ class MnnDataset(TimeFilteredDataset):
 
     def _sample_population(self) -> tuple[torch.Tensor, torch.Tensor]:
         # Sample batch_size points from each time point for population
-        x_population = []
-        for i in range(len(self.t_indcs)):
-            cells = sample_cells(
-                self.X_filtered[i], self.batch_size, self.device)
+        x_population = [
             # Add time dimension
-            x_population.append(cells.unsqueeze(1))
+            sample_cells(x_i, self.batch_size, self.device).unsqueeze(1)
+            for x_i in self.train_marginals.X
+        ]
 
         # Concatenate population along the time dimension
         x_population = torch.cat(x_population, dim=1)
         t_population = torch.tensor(
-            self.t_grid_filtered, dtype=torch.float
+            self.train_marginals.t_grid, dtype=torch.float
         ).to(self.device)
         t_population = repeat(
             t_population, 't -> b t 1', b=self.batch_size)
@@ -296,20 +275,17 @@ TRAIN_DATASET_BY_METHOD = {
 }
 
 
-def get_datasets(
-        ds_name: str,
+def build_datasets(
+        marginals: TimeSeriesMarginals,
         skip_idx: int,
         batch_size: int,
-        device: torch.device,
+        device: torch.device | str,
         method: str,
-        val_prop: float = 0.0,
         train_on_all_times: bool = False
     ) -> tuple[TimeFilteredDataset, SkipMarginalEvalDataset]:
-    """(train_dataset, val_dataset) for `ds_name`, holding out marginal `skip_idx`."""
-    data_dir = get_data(ds_name=ds_name, val_prop=val_prop)
-    X_train = data_dir["X_train"]
-    t_grid = data_dir["t_train"]
-
+    """
+    (train_dataset, val_dataset) for `marginals`, holding out marginal `skip_idx`.
+    """
     if method not in TRAIN_DATASET_BY_METHOD:
         raise ValueError(
             f"Unrecognized method: {method}. "
@@ -318,18 +294,16 @@ def get_datasets(
     ds_constructor = TRAIN_DATASET_BY_METHOD[method]
 
     train_dataset = ds_constructor(
-        X=X_train,
-        t_grid=t_grid,
+        marginals=marginals,
         skip_idx=skip_idx,
         batch_size=batch_size,
         device=device,
         train_on_skip=train_on_all_times
     )
     # Compute validation score batch wise only if dataset is too big to compute OT for all points
-    too_big = X_train[0].shape[0] > 10_000
+    too_big = marginals.cells_per_t[0] > 10_000
     val_dataset = SkipMarginalEvalDataset(
-        X=X_train,
-        t_grid=t_grid,
+        marginals=marginals,
         device=device,
         skip_idx=skip_idx,
         batch_size=batch_size if too_big else None,
@@ -338,19 +312,23 @@ def get_datasets(
 
 
 if __name__ == "__main__":
-    data_dir = get_data(val_prop=0.1)
-    X_train = data_dir["X_train"]
-    t_grid = data_dir["t_train"]
-    train_dataset = MnnDataset(
-        X=X_train,
-        t_grid=t_grid,
-        batch_size=10,
-        device="cpu",
-        skip_idx=2,
-    )
     from torch.utils.data import DataLoader
-    dataloader = DataLoader(train_dataset, batch_size=None)
-    dataiter = iter(dataloader)
-    x_t, t, x_population, t_population = next(dataiter)
-    print(f"x_t: {x_t.shape}, t: {t.shape}, x_population: {x_population.shape}, t_population: {t_population.shape}")
-    print(f"t:{t}, t_population: {t_population}")
+
+    marginals = load_marginals()
+    print(marginals)
+
+    for method in sorted(TRAIN_DATASET_BY_METHOD):
+        train_dataset, val_dataset = build_datasets(
+            marginals,
+            skip_idx=2,
+            batch_size=10,
+            device="cpu",
+            method=method,
+        )
+        batch = next(iter(DataLoader(train_dataset, batch_size=None)))
+        print(f"{method}: {[tuple(b.shape) for b in batch]}")
+
+    val_batch = next(iter(DataLoader(val_dataset, batch_size=None)))
+    x_t_prev, t, x_t_skip, t_skip = val_batch
+    print(f"val: x_t_prev={tuple(x_t_prev.shape)}, t={tuple(t.shape)}, "
+          f"x_t_skip={tuple(x_t_skip.shape)}, t_skip={t_skip}")

@@ -1,12 +1,13 @@
 from .model import CellMNN
-from .data.data_loading import FlowMatchingDataset, MnnDataset
-from .data.data_preprocessing import get_data
+from .data.marginals import TimeSeriesMarginals
+from .data.data_preprocessing import load_marginals
+from .data.data_loading import build_datasets
 
 __all__ = [
     "CellMNN",
-    "FlowMatchingDataset",
-    "MnnDataset",
-    "get_data",
+    "TimeSeriesMarginals",
+    "load_marginals",
+    "build_datasets",
 ]
 
 # Version information
