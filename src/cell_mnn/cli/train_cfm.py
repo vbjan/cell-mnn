@@ -40,7 +40,10 @@ def parse_args(argv=None):
                         choices=['ot-cfm', 'batch-ot-cfm', 'i-cfm'], help='Method to use')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--ds_name', type=str, default='embryoid',)
+    parser.add_argument('--ds_name', type=str, default='embryoid',
+                        help='Dataset name; a table in the config TOML')
+    parser.add_argument('--datasets', type=str, default=None,
+                        help='Path to the dataset config TOML (default: ./datasets.toml)')
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
     return parser.parse_args(argv)
@@ -149,7 +152,7 @@ def main(argv=None):
     np.random.seed(args.seed)
 
     # Instantiate the dataset
-    marginals = load_marginals(ds_name=args.ds_name)
+    marginals = load_marginals(ds_name=args.ds_name, config_path=args.datasets)
     latent_dim = marginals.n_features
     train_dataset, val_dataset = build_datasets(
         marginals,

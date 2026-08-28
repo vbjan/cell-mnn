@@ -33,24 +33,28 @@ PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name embryoid 
 # Baselines (I-CFM / OT-CFM), same CLI shape
 PYTHONPATH=src python -m cell_mnn.cli.train_cfm --skip_idx 1 --ds_name embryoid --method i-cfm
 
+# Your own dataset: add a table to datasets.toml, then name it. --datasets points
+# at a config elsewhere; paths inside it resolve against *its* directory.
+PYTHONPATH=src python -m cell_mnn.cli.train_mnn --ds_name my_timecourse --datasets ~/proj/datasets.toml
+
 # Data utilities (plain scripts, no PYTHONPATH needed)
 python data/inflate_data.py data/ebdata/eb_velocity_v5.npz 50000 --noise_std 0.1
 python data/recompute_pca.py data/ebdata/ebdata_v3.h5ad -n 50
 ```
 
-`train_mnn.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --seed --lr --weight_decay --batch_size --train_on_all_times --lambda_kinetic --gamma --kinetic_grid_multiplier --width --depth --init_scale --mmd_sigma --ds_name --resume_from_checkpoint`.
-`train_cfm.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --method --seed --ds_name --batch_size`.
+`train_mnn.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --seed --lr --weight_decay --batch_size --train_on_all_times --lambda_kinetic --gamma --kinetic_grid_multiplier --width --depth --init_scale --mmd_sigma --ds_name --datasets --resume_from_checkpoint`.
+`train_cfm.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --method --seed --ds_name --datasets --batch_size`.
 
-There is **no test suite** (`pytest` is in the env but no test files exist). The closest thing to unit checks are the `__main__` blocks in `src/cell_mnn/data/sources.py` and `data_loading.py`. `PYTHONPATH=src python -m cell_mnn.data.sources` is the useful one on a fresh clone: it walks every `DATASETS` entry and prints the `TimeSeriesMarginals` it got, or the source repr for the ones that are not downloaded, instead of failing.
+There is **no test suite** (`pytest` is in the env but no test files exist). The closest thing to unit checks are the `__main__` blocks in `src/cell_mnn/data/sources.py` and `data_loading.py`. `PYTHONPATH=src python -m cell_mnn.data.sources` is the useful one on a fresh clone: it walks every entry in `./datasets.toml` and prints the `TimeSeriesMarginals` it got, the declared path for the ones whose files are missing, or the config error for a malformed table — reporting per entry rather than dying on the first, which makes it the config validator.
 
 Operational notes:
-- **All dataset paths are relative** (`data/ebdata/...`) — every script must be launched from the repo root.
+- **Dataset paths resolve against the config file**, so the CLIs no longer need to run from the repo root *for data*. Everything else still does: `weights/`, `logs/`, and `data/inflate_data.py` / `recompute_pca.py` all use cwd-relative paths.
 - **W&B is not optional.** Both training scripts unconditionally build a `WandbLogger` (`save_dir="logs"`) and log final test metrics to the run summary. Use `wandb login` or `WANDB_MODE=offline`. `WANDB_MODE=disabled` is **not** a safe substitute for `train_cfm.py`: its `experiment.config.update(...)` (`train_cfm.py:183`) raises `AttributeError` against the disabled-run stub.
 - Artifacts land in `weights/mnn/<model_name>/` (`best-model.ckpt`, `hyperparameters.json`, `test_results.json`); `train_cfm.py` uses `weights/checkpoints/<model_name>/`. `.gitignore` covers only `.vscode` and `__pycache__`, so neither `weights/` nor `logs/` is ignored — don't commit them.
 - `train_mnn.py` hardcodes `use_cuda = True`, so it **requires a GPU**; `train_cfm.py` falls back to CPU.
 - `train_cfm.py`'s post-fit `test_trainer` omits `devices=1` (which `train_mnn.py` sets), so on a multi-GPU host Lightning spawns DDP for the test pass and re-executes `main()` in the child process. Pin `CUDA_VISIBLE_DEVICES=0` for single-run reproductions.
 - Defaults in `parse_args` are the paper's hyperparameters — changing one silently changes the reproduction.
-- To run against synthetic data without the downloads, build a `TimeSeriesMarginals` and hand it to `build_datasets` — no monkeypatching. To exercise the readers too, point an `AnnDataSource` / `NpzSource` at a fixture file instead of adding a `DATASETS` entry. There is deliberately **no** synthetic source in `sources.py`.
+- To run against synthetic data without the downloads, build a `TimeSeriesMarginals` and hand it to `build_datasets` — no monkeypatching. To exercise the readers and the config path too, write a throwaway `datasets.toml` next to fixture files and pass `--datasets` / `config_path=`. There is deliberately **no** synthetic source in `sources.py`.
 
 ## Architecture
 
@@ -59,16 +63,22 @@ The whole pipeline is built around one evaluation protocol: **leave-one-marginal
 **0. The data contract — `src/cell_mnn/data/marginals.py::TimeSeriesMarginals`**
 The single interface between data sources and datasets: `X` (one array of shape `(n_cells_i, n_features)` per timepoint) + `t_grid` (strictly ascending real times) + `name`. `__post_init__` validates arity, 2-D-ness, consistent `n_features`, non-empty marginals, finiteness, and strict ascent, and coerces `t_grid` to python `float` — so numpy scalars never reach the `val_emd(t_skip=...)` metric key. Exposes `n_times` / `n_features` / `cells_per_t` / `n_cells`, `m[i] -> (X_i, t_i)`, and `drop(i)`. Anything that can produce populations-per-timepoint produces one of these, and every dataset consumes one — it is the only thing that crosses between `sources.py` and `data_loading.py`.
 
-**1. Sources — `src/cell_mnn/data/sources.py`**
-A source knows where its data lives and how to find the acquisition time and the feature embedding inside it; it knows nothing about training. `MarginalSource` is the `Protocol` (`load(n_features, name) -> TimeSeriesMarginals`); `AnnDataSource` (h5ad: `obsm[embedding_key]` + `obs[time_key]`, with `use_codes=True` for string-categorical labels whose *category order* carries the time order) and `NpzSource` (flat arrays) are the two readers. `DATASETS` maps `ds_name` → source; `load_marginals(ds_name, n_features=5, standardize=True)` is a lookup plus the transform.
+**1. Sources — `src/cell_mnn/data/sources.py` + `datasets.toml`**
+The dataset registry lives in a **config file, not in the library**. `datasets.toml` at the repo root is the checked-in one; `--datasets PATH` (or `config_path=`) overrides it, and the default is `./datasets.toml`. There is no env var and no packaged fallback — those are the only two rules.
 
-Two extension points, neither of which touches `load_marginals` or anything downstream: a dataset an existing reader handles is **one `DATASETS` entry**; a new *kind* of data is **one class** with a `load` method.
+Each top-level table is a `ds_name`; `type` selects the reader and the remaining keys are that reader's constructor kwargs, splatted in as `SOURCE_TYPES[type](**spec)`. **The reader's dataclass signature is the schema** — a typo'd key raises `TypeError: got an unexpected keyword argument 'time_ky'`, wrapped with the dataset name. Don't add a hand-written schema; it already exists.
+
+`path` is resolved **relative to the config file's directory**, not the cwd, so a config and its data move together and training runs from anywhere. Absolute paths pass through.
+
+A source knows where its data lives and how to find the acquisition time and the feature embedding inside it; it knows nothing about training. `MarginalSource` is the `Protocol` (`load(n_features, name) -> TimeSeriesMarginals`); `AnnDataSource` (h5ad: `obsm[embedding_key]` + `obs[time_key]`, with `use_codes=True` for string-categorical labels whose *category order* carries the time order) and `NpzSource` (flat arrays) are the two readers. `load_marginals(ds_name, n_features=5, standardize=True, config_path=None)` is the whole path: resolve config → parse TOML → look up `ds_name` → build the source → load → transform. There is deliberately no separate `load_registry`; only the requested table is built, so a half-written entry elsewhere in the config doesn't block a working one. `ds_name` has **no default** — the library does not presume a dataset.
+
+Two extension points: a dataset an existing reader handles is **one `datasets.toml` table** (no library change at all); a new *kind* of data is **one class plus one `SOURCE_TYPES` entry**.
 
 Both readers funnel into `marginals_from_flat(coords, t_values, n_features, name)`, which is where the grouping rule lives: it iterates `np.unique(t_values)` (sorted) and appends to `X` and `t_grid` in the *same* pass, so a marginal cannot be paired with the wrong time. The pre-refactor code built `X` in `pandas.unique` order (order of appearance) and `t_grid` sorted — silently mismatched for any file not stored in ascending time order, and undetectable by `__post_init__`. Don't reintroduce a second iteration order.
 
-`marginals_from_anndata(adata, time_key, n_features, ...)` is the same logic with no filesystem access, exported from `cell_mnn` — that is the bring-your-own-timecourse entry point, and it skips `DATASETS` entirely. `scanpy` is imported *inside* `AnnDataSource.load`, so the npz path and `marginals_from_anndata` don't pay for it.
+`marginals_from_anndata(adata, time_key, n_features, ...)` is the same logic with no filesystem access, exported from `cell_mnn` — that is the bring-your-own-timecourse entry point for Python callers, and it skips the config entirely. `scanpy` is imported *inside* `AnnDataSource.load`, so the npz path and `marginals_from_anndata` don't pay for it.
 
-Valid `ds_name`: `embryoid`, `embryoid_less_preprocessed`, `embryoid_inflated`, `cite`, `cite_inflated`, `multi`, `multi_inflated`.
+`ds_name` values are whatever `datasets.toml` declares — the checked-in one has `embryoid`, `embryoid_less_preprocessed`, `embryoid_inflated`, `cite`, `cite_inflated`, `multi`, `multi_inflated`. `ds_name` also names the W&B project and the `weights/mnn/<...>/` directory, so it is an experiment label as well as a data pointer.
 
 **1b. Transforms — `src/cell_mnn/data/transforms.py`**
 `TimeSeriesMarginals -> TimeSeriesMarginals`, composed onto a source by `load_marginals` so a caller bringing its own data can skip them. `zscore` is the only one: per-feature standardization with statistics **pooled over all timepoints** — per-marginal statistics would erase the cross-time drift the dynamics are fitted to. It raises on a constant feature rather than letting `inf` reach `__post_init__`. Nothing here computes an embedding; `n_features` slices leading components off a *precomputed* one (`data/recompute_pca.py` produces those). `n_features` is on no CLI, so the feature dimension is effectively 5 repo-wide — but both CLIs read it from `marginals.n_features` rather than hardcoding it.
@@ -103,7 +113,7 @@ There is no README in the repo any more; several things it used to document have
 
 - **`--debug` does not run clean to completion in either script.** `fast_dev_run` disables `ModelCheckpoint`, so the `weights/<...>/` directory is never created and the post-fit `save_hyperparams_to_json` dies with `FileNotFoundError`. Training and validation do execute first, so it still smoke-tests the model path — just expect the traceback at the end. In `train_mnn.py` the write is the *first* thing to fail; the `torch.load(checkpoint_callback.best_model_path)` on the next line would fail too, on an empty path.
 - `interpretability.py` was removed in `076b0fa` ("removed unused code"); `validate_on_trrust.py`, `pure_OT_interpolation.py`, and `pre_trained_models/` went in `c0a43ef`. The surviving half of that experiment is the ground-truth TSVs in `data/tf_targets_trrust/` (FOS, HMGA1, JUN, POU5F1, SOX2, YBX1). Recover the drivers with `git show 076b0fa^:src/cell_mnn/interpretability.py` and `git show c0a43ef^:validate_on_trrust.py`. `predict_gene_interaction` only calls `model.encode(x_sample, t)` and treats the result as `A`, which is exactly what the current model returns — so it is still API-compatible and can be un-deleted as-is; only its `day` argument name is off-convention (`t`).
-- `src/cell_mnn/__init__.py` exports `CellMNN`, `TimeSeriesMarginals`, `load_marginals`, `marginals_from_anndata`, and `build_datasets`. The dataset classes, the source classes, `DATASETS`, and `zscore` are import-by-path only.
+- `src/cell_mnn/__init__.py` exports `CellMNN`, `TimeSeriesMarginals`, `load_marginals`, `marginals_from_anndata`, and `build_datasets`. The dataset classes, the source classes, `SOURCE_TYPES`, and `zscore` are import-by-path only.
 - The `skip_idx` asserts are `1 <= skip_idx <= n_times - 1` in both `TimeFilteredDataset` and `SkipMarginalEvalDataset`, so the **final** timepoint *can* be held out.
 - `train_mnn.py` sets `CUBLAS_WORKSPACE_CONFIG` "to force determinism", but calls `fix_seed(seed, use_det_algos=False)`; deterministic algorithms are off by default.
 - `.vscode/settings.json` pins an interpreter path that is not `cell_mnn_env`.

@@ -52,7 +52,10 @@ def parse_args(argv=None):
                         help='Weight initialization scale for final layer')
     parser.add_argument('--mmd_sigma', type=float, default=1.0,
                         help='Sigma for MMD loss')
-    parser.add_argument('--ds_name', type=str, default='embryoid',)
+    parser.add_argument('--ds_name', type=str, default='embryoid',
+                        help='Dataset name; a table in the config TOML')
+    parser.add_argument('--datasets', type=str, default=None,
+                        help='Path to the dataset config TOML (default: ./datasets.toml)')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -67,7 +70,7 @@ def main(argv=None):
 
     uid = str(uuid.uuid4())
 
-    marginals = load_marginals(ds_name=args.ds_name)
+    marginals = load_marginals(ds_name=args.ds_name, config_path=args.datasets)
     train_dataset, val_dataset = build_datasets(
         marginals,
         skip_idx=args.skip_idx,

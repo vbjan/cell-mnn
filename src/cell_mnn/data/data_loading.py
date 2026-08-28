@@ -314,7 +314,7 @@ def build_datasets(
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    marginals = load_marginals()
+    marginals = load_marginals("embryoid")
     print(marginals)
 
     for method in sorted(TRAIN_DATASET_BY_METHOD):

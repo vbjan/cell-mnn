@@ -8,7 +8,9 @@ Every reader funnels into `marginals_from_flat`, so the grouping-by-time rule is
 written down exactly once.
 """
 
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
@@ -157,65 +159,102 @@ class NpzSource:
         )
 
 
-# Paths are relative to the repo root -- every script must be launched from there.
-DATASETS: dict[str, MarginalSource] = {
-    "embryoid": NpzSource(
-        "data/ebdata/eb_velocity_v5.npz",
-    ),
-    "embryoid_less_preprocessed": AnnDataSource(
-        "data/ebdata/ebdata_v3_recomputed_pca.h5ad",
-        time_key="sample_labels",
-        use_codes=True,
-    ),
-    "embryoid_inflated": AnnDataSource(
-        "data/ebdata/eb_velocity_v5_inflated.h5ad",
-        time_key="sample_labels",
-    ),
-    "cite": AnnDataSource(
-        "data/citedata/op_cite_inputs_0.h5ad",
-        time_key="day",
-    ),
-    "cite_inflated": AnnDataSource(
-        "data/citedata/op_cite_inputs_0_inflated.h5ad",
-        time_key="day",
-    ),
-    "multi": AnnDataSource(
-        "data/multidata/op_train_multi_targets_0.h5ad",
-        time_key="day",
-    ),
-    "multi_inflated": AnnDataSource(
-        "data/multidata/op_train_multi_targets_0_inflated.h5ad",
-        time_key="day",
-    ),
+SOURCE_TYPES: dict[str, type] = {
+    "anndata": AnnDataSource,
+    "npz": NpzSource,
 }
+
+DEFAULT_CONFIG_PATH = Path("datasets.toml")
+
+
+def _source_from_spec(spec: object, ds_name: str, root: Path) -> MarginalSource:
+    """One `[ds_name]` table from the config file as a source object."""
+    if not isinstance(spec, dict):
+        raise ValueError(
+            f"dataset {ds_name!r}: expected a [{ds_name}] table, "
+            f"got {type(spec).__name__}")
+
+    spec = dict(spec)  # the parsed config is the caller's; don't mutate it
+
+    if "type" not in spec:
+        raise ValueError(
+            f"dataset {ds_name!r}: missing 'type'; "
+            f"must be one of {sorted(SOURCE_TYPES)}")
+
+    type_name = spec.pop("type")
+    if type_name not in SOURCE_TYPES:
+        raise ValueError(
+            f"dataset {ds_name!r}: unknown type {type_name!r}; "
+            f"must be one of {sorted(SOURCE_TYPES)}")
+
+    if "path" not in spec:
+        raise ValueError(f"dataset {ds_name!r}: missing 'path'")
+
+    # Relative to the config file rather than the cwd, so a config and its data
+    # move together and training can be launched from any directory. An absolute
+    # path in the config passes through unchanged.
+    spec["path"] = str(root / spec["path"])
+
+    try:
+        return SOURCE_TYPES[type_name](**spec)
+    except TypeError as err:
+        # The reader's signature is the schema -- surface its complaint verbatim,
+        # which names the offending key.
+        raise ValueError(f"dataset {ds_name!r}: {err}") from None
 
 
 def load_marginals(
-        ds_name: str = "embryoid",
+        ds_name: str,
         n_features: int = 5,
         standardize: bool = True,
+        config_path: Path | str | None = None,
     ) -> TimeSeriesMarginals:
     """
+    Load a dataset declared in the config TOML as a `TimeSeriesMarginals`.
+
+    Each top-level table in the config names a dataset; `type` selects the reader
+    and the remaining keys are that reader's constructor arguments. 
+
     Args:
-        ds_name: key into `DATASETS`.
+        ds_name: table name in the config file.
         n_features: how many leading components of the *precomputed* embedding to
             keep.
-        standardize: pooled z-score over all timepoints.
+        standardize: pooled z-score over all timepoints (see `transforms.zscore`).
+        config_path: dataset config TOML; defaults to `./datasets.toml`.
     """
-    if ds_name not in DATASETS:
-        raise ValueError(
-            f"Dataset {ds_name!r} not recognized. Must be one of {sorted(DATASETS)}")
+    config_path = Path(config_path or DEFAULT_CONFIG_PATH).resolve()
 
-    marginals = DATASETS[ds_name].load(n_features=n_features, name=ds_name)
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"no dataset config at {config_path}; write one or point --datasets "
+            f"(config_path=) at an existing file")
+
+    try:
+        with config_path.open("rb") as f:
+            specs = tomllib.load(f)
+    except tomllib.TOMLDecodeError as err:
+        raise ValueError(f"{config_path}: {err}") from None
+
+    if ds_name not in specs:
+        raise ValueError(
+            f"dataset {ds_name!r} not in {config_path}; available: {sorted(specs)}")
+
+    source = _source_from_spec(specs[ds_name], ds_name, root=config_path.parent)
+    marginals = source.load(n_features=n_features, name=ds_name)
 
     return zscore(marginals) if standardize else marginals
 
 
 if __name__ == "__main__":
-    # Smoke-checks every registry entry; reports the ones that are not downloaded
-    # instead of failing, so it is runnable on a fresh clone.
-    for ds_name, source in sorted(DATASETS.items()):
+    # Validates every entry in the default config and reports per dataset, so one
+    # broken or undownloaded entry does not hide the rest.
+    with DEFAULT_CONFIG_PATH.open("rb") as f:
+        specs = tomllib.load(f)
+
+    for ds_name, spec in sorted(specs.items()):
         try:
-            print(load_marginals(ds_name=ds_name))
+            print(load_marginals(ds_name))
         except OSError:
-            print(f"{ds_name}: could not read {source}")
+            print(f"{ds_name}: could not read {spec.get('path')}")
+        except ValueError as err:
+            print(f"{ds_name}: {err}")

@@ -1,0 +1,54 @@
+# Dataset registry for the cell_mnn CLIs: `--ds_name <table name>`.
+#
+# Each table declares one dataset. `type` picks the reader; the remaining keys are
+# that reader's constructor arguments
+#
+#   type = "anndata"    h5ad, embedding in obsm, acquisition time in obs
+#     path           (required)
+#     time_key       (required)  obs column holding the acquisition time
+#     embedding_key  default "X_pca"
+#     use_codes      default false -- use the categorical *codes* of time_key,
+#                    for string labels whose category order carries the time order
+#
+#   type = "npz"        flat arrays in an .npz archive
+#     path           (required)
+#     time_key       default "sample_labels"
+#     embedding_key  default "pcs"
+#
+# `path` is resolved relative to THIS file, not the working directory, so a config
+# and its data move together and training can be launched from anywhere.
+
+[embryoid]
+type = "npz"
+path = "data/ebdata/eb_velocity_v5.npz"
+
+[embryoid_less_preprocessed]
+type = "anndata"
+path = "data/ebdata/ebdata_v3_recomputed_pca.h5ad"
+time_key = "sample_labels"
+use_codes = true    # labels are strings; their category order is the time order
+
+[embryoid_inflated]
+type = "anndata"
+path = "data/ebdata/eb_velocity_v5_inflated.h5ad"
+time_key = "sample_labels"
+
+[cite]
+type = "anndata"
+path = "data/citedata/op_cite_inputs_0.h5ad"
+time_key = "day"
+
+[cite_inflated]
+type = "anndata"
+path = "data/citedata/op_cite_inputs_0_inflated.h5ad"
+time_key = "day"
+
+[multi]
+type = "anndata"
+path = "data/multidata/op_train_multi_targets_0.h5ad"
+time_key = "day"
+
+[multi_inflated]
+type = "anndata"
+path = "data/multidata/op_train_multi_targets_0_inflated.h5ad"
+time_key = "day"
