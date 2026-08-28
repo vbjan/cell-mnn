@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from torch.utils.data import DataLoader
 from cell_mnn.data.data_loading import build_datasets
-from cell_mnn.data.data_preprocessing import load_marginals
+from cell_mnn.data.sources import load_marginals
 from torchdyn.core import NeuralODE
 from torchcfm.utils import torch_wrapper
 

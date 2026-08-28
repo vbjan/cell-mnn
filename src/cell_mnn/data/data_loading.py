@@ -7,7 +7,7 @@ import numpy as np
 from torch.utils.data import IterableDataset
 from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from einops import repeat
-from .data_preprocessing import load_marginals
+from .sources import load_marginals
 from .marginals import TimeSeriesMarginals
 
 

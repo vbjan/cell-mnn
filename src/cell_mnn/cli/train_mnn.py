@@ -1,7 +1,7 @@
 from cell_mnn.model import CellMNN
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
 from cell_mnn.data.data_loading import build_datasets
-from cell_mnn.data.data_preprocessing import load_marginals
+from cell_mnn.data.sources import load_marginals
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pytorch_lightning as pl
