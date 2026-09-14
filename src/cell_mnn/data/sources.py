@@ -9,6 +9,7 @@ written down exactly once.
 """
 
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -17,7 +18,7 @@ import numpy as np
 
 from ..checks import require, require_key
 from .marginals import TimeSeriesMarginals
-from .transforms import zscore
+from .transforms import minmax_time, zscore
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -191,6 +192,7 @@ def load_marginals(
         ds_name: str,
         n_features: int = 5,
         standardize: bool = True,
+        scale_time: bool = True,
         config_path: Path | str | None = None,
     ) -> TimeSeriesMarginals:
     """
@@ -204,7 +206,11 @@ def load_marginals(
         n_features: how many leading components of the *precomputed* embedding to
             keep.
         standardize: pooled z-score over all timepoints (see `transforms.zscore`).
+        scale_time: min-max `t_grid` onto [0, 1] (see `transforms.minmax_time`).
         config_path: dataset config TOML; defaults to `./datasets.toml`.
+
+    Both transforms record what they undid on the returned object, as
+    `feature_scaling` / `time_scaling`. 
     """
     config_path = Path(config_path or DEFAULT_CONFIG_PATH).resolve()
 
@@ -225,7 +231,18 @@ def load_marginals(
     source = _source_from_spec(specs[ds_name], ds_name, root=config_path.parent)
     marginals = source.load(n_features=n_features, name=ds_name)
 
-    return zscore(marginals) if standardize else marginals
+    # The two transforms are independent -- one rewrites X, the other t_grid -- so the
+    # order here is presentational, not numerical.
+    pipeline: list[Callable[[TimeSeriesMarginals], TimeSeriesMarginals]] = []
+    if standardize:
+        pipeline.append(zscore)
+    if scale_time:
+        pipeline.append(minmax_time)
+
+    for transform in pipeline:
+        marginals = transform(marginals)
+
+    return marginals
 
 
 if __name__ == "__main__":

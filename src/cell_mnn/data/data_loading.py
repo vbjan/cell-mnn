@@ -37,8 +37,7 @@ class TimeFilteredDataset(IterableDataset):
     Base for every training dataset: holds out the marginal at `skip_idx`.
 
     Only the surviving timepoints are kept, as `train_marginals` -- the incoming series
-    without `skip_idx`, or all of it when `train_on_skip` is set. `t_skip` is retained
-    separately because the metric key both callbacks monitor is built from it.
+    without `skip_idx`, or all of it when `train_on_skip` is set.
     """
 
     def __init__(
@@ -54,7 +53,6 @@ class TimeFilteredDataset(IterableDataset):
         assert_valid_skip_idx(skip_idx, marginals.n_times)
 
         self.skip_idx = skip_idx
-        self.t_skip = marginals.t_grid[skip_idx]
         self.train_marginals = marginals if train_on_skip else marginals.drop(skip_idx)
 
         self.batch_size = batch_size
@@ -202,7 +200,7 @@ class SkipMarginalEvalDataset(IterableDataset):
                    else np.random.randint(0, X.shape[0], size=self.batch_size))
         return to_tensor(X[indices], self.device)
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]]:
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int]]:
         while True:
             x_t_prev = self._load_marginal(self.X_t_prev)
             x_t_skip = self._load_marginal(self.X_t_skip)
@@ -210,7 +208,7 @@ class SkipMarginalEvalDataset(IterableDataset):
             t = torch.full((x_t_prev.shape[0],), float(
                 self.t_prev), device=self.device)
 
-            yield (x_t_prev, t, x_t_skip, self.t_skip)
+            yield (x_t_prev, t, x_t_skip, self.t_skip, self.skip_idx)
 
     def __len__(self) -> int:
         if self.batch_size is None:
@@ -328,6 +326,6 @@ if __name__ == "__main__":
         print(f"{method}: {[tuple(b.shape) for b in batch]}")
 
     val_batch = next(iter(DataLoader(val_dataset, batch_size=None)))
-    x_t_prev, t, x_t_skip, t_skip = val_batch
+    x_t_prev, t, x_t_skip, t_skip, skip_idx = val_batch
     print(f"val: x_t_prev={tuple(x_t_prev.shape)}, t={tuple(t.shape)}, "
-          f"x_t_skip={tuple(x_t_skip.shape)}, t_skip={t_skip}")
+          f"x_t_skip={tuple(x_t_skip.shape)}, t_skip={t_skip}, skip_idx={skip_idx}")

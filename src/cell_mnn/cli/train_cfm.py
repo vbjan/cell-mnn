@@ -49,6 +49,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Number of leading components of the precomputed embedding to use')
     parser.add_argument('--no_standardize', action='store_true',
                         help='Skip the pooled z-score of the features over all timepoints')
+    parser.add_argument('--no_time_scaling', action='store_true',
+                        help='Skip min-max scaling of t_grid onto [0, 1]')
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
     return parser.parse_args(argv)
@@ -92,7 +94,8 @@ class FlowMatchingModel(pl.LightningModule):
             skip_idx: int,
             t_grid: Sequence[float],
             lr: float,
-            w: int = 64
+            w: int = 64,
+            n_steps: int = 100
         ) -> None:
         super().__init__()
         self.ot_cfm_model = CFMVelocityMLP(dim=dim, time_varying=True, w=64)
@@ -105,7 +108,9 @@ class FlowMatchingModel(pl.LightningModule):
         self.t_prev = t_grid[skip_idx - 1]
 
         self.lr = lr
-        self.dt = 0.01
+        # Steps per interval, not an absolute dt: integration accuracy must not depend
+        # on whether t_grid is in days or scaled onto [0, 1].
+        self.n_steps = n_steps
         self.mmd_loss = MMDLoss(sigma=1.0)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
@@ -136,12 +141,13 @@ class FlowMatchingModel(pl.LightningModule):
 
     def validation_step(
             self,
-            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int],
             batch_idx: int,
             num_iter_max: int = 200_000
         ) -> float:
-        x_t_prev, t, x_t_skip, _ = batch
-        t_span = torch.arange(self.t_prev, self.t_skip + self.dt, self.dt)
+        x_t_prev, t, x_t_skip, _, _ = batch
+        t_span = torch.linspace(self.t_prev, self.t_skip, self.n_steps + 1,
+                                device=x_t_prev.device)
         traj = self.node.trajectory(
             x_t_prev,
             t_span=t_span,
@@ -150,19 +156,19 @@ class FlowMatchingModel(pl.LightningModule):
         pred_dist = traj[-1, :, :]
 
         mmd = self.mmd_loss(pred_dist, x_t_skip)
-        self.log(f"val_mmd(t_skip={self.t_skip})", mmd.cpu().item())
+        self.log(f"val_mmd(skip_idx={self.skip_idx})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
             x_t_skip.cpu().numpy(),
             num_iter_max=num_iter_max)
-        self.log(f"val_emd(t_skip={self.t_skip})", emd)
+        self.log(f"val_emd(skip_idx={self.skip_idx})", emd)
 
         return emd
 
     def test_step(
             self,
-            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int],
             batch_idx: int
         ) -> float:
         return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
@@ -192,6 +198,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         config_path=args.datasets,
         n_features=args.n_features,
         standardize=not args.no_standardize,
+        scale_time=not args.no_time_scaling,
     )
     latent_dim = marginals.n_features
     train_dataset, val_dataset = build_datasets(
@@ -238,7 +245,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor=f'val_emd(t_skip={cfm_model.t_skip})',
+        monitor=f'val_emd(skip_idx={args.skip_idx})',
         min_delta=0.00,
         patience=args.patience,
         verbose=True,
@@ -248,7 +255,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Create model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor=f'val_emd(t_skip={cfm_model.t_skip})',
+        monitor=f'val_emd(skip_idx={args.skip_idx})',
         dirpath=f'weights/checkpoints/{model_name}/',
         filename=f'best-model',
         save_top_k=1,
@@ -288,10 +295,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         enable_checkpointing=False,
     )
     test_results = test_trainer.test(best_model, val_loader)
-    print(f"Test EMD: {test_results[0][f'val_emd(t_skip={cfm_model.t_skip})']:.4f}")
+    print(f"Test EMD: {test_results[0][f'val_emd(skip_idx={args.skip_idx})']:.4f}")
 
     # Log the final test EMD to wandb
-    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(t_skip={cfm_model.t_skip})']
+    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(skip_idx={args.skip_idx})']
 
     # Save hyperparameters as a JSON file
     hyperparams_path = os.path.join(

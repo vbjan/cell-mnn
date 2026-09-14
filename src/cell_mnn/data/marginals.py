@@ -5,6 +5,50 @@ import numpy as np
 from ..checks import require
 
 
+@dataclass(frozen=True)
+class ZScoreParams:
+    """
+    Per-feature statistics of the data as it was *before* standardization.
+
+    Recorded on the standardized `TimeSeriesMarginals` so the transform can be
+    undone (to report in the original units) or replayed on a second timecourse
+    that has to land in the same coordinates.
+    """
+
+    mean: np.ndarray  # (n_features,)
+    std: np.ndarray   # (n_features,)
+
+    def apply(self, X: np.ndarray) -> np.ndarray:
+        return (X - self.mean) / self.std
+
+    def inverse(self, X: np.ndarray) -> np.ndarray:
+        return X * self.std + self.mean
+
+
+@dataclass(frozen=True)
+class MinMaxParams:
+    """
+    The interval a coordinate spanned *before* it was scaled onto [0, 1].
+
+    `span` is also the factor the dynamics absorb: scaling time by it leaves the
+    trajectory unchanged only if `A` grows by the same factor, so `A_original =
+    A_scaled / span` recovers the operator in the original time units.
+    """
+
+    lo: float
+    hi: float
+
+    @property
+    def span(self) -> float:
+        return self.hi - self.lo
+
+    def apply(self, t: float) -> float:
+        return (t - self.lo) / self.span
+
+    def inverse(self, t: float) -> float:
+        return t * self.span + self.lo
+
+
 @dataclass(repr=False)
 class TimeSeriesMarginals:
     """
@@ -19,11 +63,17 @@ class TimeSeriesMarginals:
            times, not indices: they enter the dynamics directly as `expm(A * delta_t)`, so
            non-uniform spacing is meaningful.
         name: dataset label, used in error messages and logs.
+        feature_scaling: statistics of `X` before standardization, or None if `X` is
+           still in its original units. Set by `transforms.zscore`.
+        time_scaling: interval `t_grid` spanned before it was scaled onto [0, 1], or
+           None if `t_grid` is still in its original units. Set by `transforms.minmax_time`.
     """
 
     X: list[np.ndarray]
     t_grid: list[float]
     name: str = "unnamed"
+    feature_scaling: ZScoreParams | None = None
+    time_scaling: MinMaxParams | None = None
 
     def __post_init__(self) -> None:
         _validate(self)
@@ -60,13 +110,17 @@ class TimeSeriesMarginals:
             X=[self.X[i] for i in keep],
             t_grid=[self.t_grid[i] for i in keep],
             name=self.name,
+            feature_scaling=self.feature_scaling,
+            time_scaling=self.time_scaling,
         )
 
     def __repr__(self) -> str:
         # The default dataclass repr would dump every cell of every marginal.
         return (f"{type(self).__name__}(name={self.name!r}, n_times={self.n_times}, "
                 f"n_features={self.n_features}, cells_per_t={self.cells_per_t}, "
-                f"t_grid={self.t_grid})")
+                f"t_grid={self.t_grid}, "
+                f"standardized={self.feature_scaling is not None}, "
+                f"time_scaled={self.time_scaling is not None})")
 
 
 def _validate(m: TimeSeriesMarginals) -> None:
@@ -93,3 +147,18 @@ def _validate(m: TimeSeriesMarginals) -> None:
         require(t_prev < t_next,
                 f"{m.name}: t_grid must be strictly ascending, "
                 f"got t[{i}]={t_prev} >= t[{i + 1}]={t_next}")
+
+    if (fs := m.feature_scaling) is not None:
+        require(fs.mean.shape == (m.n_features,),
+                f"{m.name}: feature_scaling.mean has shape {fs.mean.shape}, "
+                f"expected ({m.n_features},)")
+        require(fs.std.shape == (m.n_features,),
+                f"{m.name}: feature_scaling.std has shape {fs.std.shape}, "
+                f"expected ({m.n_features},)")
+        require(bool(np.all(fs.std > 0)),
+                f"{m.name}: feature_scaling.std must be positive to be invertible")
+
+    if (ts := m.time_scaling) is not None:
+        require(ts.hi > ts.lo,
+                f"{m.name}: time_scaling must span a positive interval, "
+                f"got lo={ts.lo} >= hi={ts.hi}")

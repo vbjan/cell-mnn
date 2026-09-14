@@ -60,6 +60,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Number of leading components of the precomputed embedding to use')
     parser.add_argument('--no_standardize', action='store_true',
                         help='Skip the pooled z-score of the features over all timepoints')
+    parser.add_argument('--no_time_scaling', action='store_true',
+                        help='Skip min-max scaling of t_grid onto [0, 1]')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -79,6 +81,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         config_path=args.datasets,
         n_features=args.n_features,
         standardize=not args.no_standardize,
+        scale_time=not args.no_time_scaling,
     )
     train_dataset, val_dataset = build_datasets(
         marginals,
@@ -92,7 +95,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     dataloader = DataLoader(train_dataset, batch_size=None)
     val_loader = DataLoader(val_dataset, batch_size=None)
 
-    model_name = f"mnn_{args.ds_name}_{timestamp}_t_skip{train_dataset.t_skip}_{uid}"
+    model_name = f"mnn_{args.ds_name}_{timestamp}_skip_idx{args.skip_idx}_{uid}"
 
     model = CellMNN(
         latent_dim=latent_dim,
@@ -125,7 +128,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor=f'val_emd(t_skip={train_dataset.t_skip})',
+        monitor=f'val_emd(skip_idx={args.skip_idx})',
         min_delta=0.00,
         patience=args.patience,
         verbose=True,
@@ -135,7 +138,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Create model checkpoint callback
     checkpoint_callback = ModelCheckpoint(
-        monitor=f'val_emd(t_skip={train_dataset.t_skip})',
+        monitor=f'val_emd(skip_idx={args.skip_idx})',
         dirpath=f'weights/mnn/{model_name}/',
         filename=f'best-model',
         save_top_k=1,
