@@ -56,6 +56,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Dataset name; a table in the config TOML')
     parser.add_argument('--datasets', type=str, default=None,
                         help='Path to the dataset config TOML (default: ./datasets.toml)')
+    parser.add_argument('--n_features', type=int, default=5,
+                        help='Number of leading components of the precomputed embedding to use')
+    parser.add_argument('--no_standardize', action='store_true',
+                        help='Skip the pooled z-score of the features over all timepoints')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -70,7 +74,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     uid = str(uuid.uuid4())
 
-    marginals = load_marginals(ds_name=args.ds_name, config_path=args.datasets)
+    marginals = load_marginals(
+        ds_name=args.ds_name,
+        config_path=args.datasets,
+        n_features=args.n_features,
+        standardize=not args.no_standardize,
+    )
     train_dataset, val_dataset = build_datasets(
         marginals,
         skip_idx=args.skip_idx,

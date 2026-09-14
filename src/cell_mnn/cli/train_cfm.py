@@ -45,6 +45,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Dataset name; a table in the config TOML')
     parser.add_argument('--datasets', type=str, default=None,
                         help='Path to the dataset config TOML (default: ./datasets.toml)')
+    parser.add_argument('--n_features', type=int, default=5,
+                        help='Number of leading components of the precomputed embedding to use')
+    parser.add_argument('--no_standardize', action='store_true',
+                        help='Skip the pooled z-score of the features over all timepoints')
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
     return parser.parse_args(argv)
@@ -183,7 +187,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     np.random.seed(args.seed)
 
     # Instantiate the dataset
-    marginals = load_marginals(ds_name=args.ds_name, config_path=args.datasets)
+    marginals = load_marginals(
+        ds_name=args.ds_name,
+        config_path=args.datasets,
+        n_features=args.n_features,
+        standardize=not args.no_standardize,
+    )
     latent_dim = marginals.n_features
     train_dataset, val_dataset = build_datasets(
         marginals,
@@ -205,7 +214,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         lr=lr,
         t_grid=marginals.t_grid,
     ).to(device)
-    model_name = f"{args.method}_5-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
+    model_name = f"{args.method}_{latent_dim}-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
 
     wandb_logger = WandbLogger(
         project=f"OT-CFM-{args.ds_name}",
