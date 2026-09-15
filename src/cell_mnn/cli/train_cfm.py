@@ -158,7 +158,7 @@ class FlowMatchingModel(pl.LightningModule):
             batch_idx: int
         ) -> float:
         # n=None scores every cell of the left-out marginal, not just eval_n_samples of them.
-        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None)
+        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None, prefix="final_val")
 
     def _eval_step(
             self,
@@ -166,6 +166,7 @@ class FlowMatchingModel(pl.LightningModule):
             batch_idx: int,
             num_iter_max: int,
             n: int | None,
+            prefix: str = "val",
         ) -> float:
         x_t_prev, t, x_t_skip, _, _ = batch
 
@@ -180,14 +181,14 @@ class FlowMatchingModel(pl.LightningModule):
 
         # Each metric samples down to what it can afford, independently of the other.
         mmd = self.mmd_loss(pred_dist, x_t_skip, n=n)
-        self.log(f"val_mmd(skip_idx={self.skip_idx})", mmd.cpu().item())
+        self.log(f"{prefix}_mmd(skip_idx={self.skip_idx})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
             x_t_skip.cpu().numpy(),
             num_iter_max=num_iter_max,
             n=n)
-        self.log(f"val_emd(skip_idx={self.skip_idx})", emd)
+        self.log(f"{prefix}_emd(skip_idx={self.skip_idx})", emd)
 
         return emd
 
@@ -318,10 +319,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         enable_checkpointing=False,
     )
     test_results = test_trainer.test(best_model, val_loader)
-    print(f"Test EMD: {test_results[0][f'val_emd(skip_idx={args.skip_idx})']:.4f}")
+    print(f"Final validation EMD: {test_results[0][f'final_val_emd(skip_idx={args.skip_idx})']:.4f}")
 
-    # Log the final test EMD to wandb
-    wandb_logger.experiment.summary["final_val_emd"] = test_results[0][f'val_emd(skip_idx={args.skip_idx})']
+    # Log final (high-precision) validation results to wandb
+    for metric_name, value in test_results[0].items():
+        wandb_logger.experiment.summary[metric_name] = value
 
     # Save hyperparameters as a JSON file
     hyperparams_path = os.path.join(

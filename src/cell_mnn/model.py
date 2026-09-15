@@ -236,7 +236,7 @@ class CellMNN(pl.LightningModule):
         batch_idx: int
     ) -> float:
         # n=None scores every cell of the left-out marginal, not just eval_n_samples of them.
-        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None)
+        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None, prefix="final_val")
 
     def _eval_step(
         self,
@@ -245,6 +245,7 @@ class CellMNN(pl.LightningModule):
         batch_idx: int,
         num_iter_max: int,
         n: int | None,
+        prefix: str = "val",
     ) -> float:
         # t_skip is where the trajectory is decoded; skip_idx names the metric. Keying
         # on the index keeps `val_emd(...)` stable under any rescaling of t_grid.
@@ -260,7 +261,7 @@ class CellMNN(pl.LightningModule):
         self.log_A_eigenvalues(A)
 
         mmd = self.loss_fn(pred_dist, x_t_skip, n=n)
-        self.log(f"val_mmd(skip_idx={skip_idx})", mmd.cpu().item())
+        self.log(f"{prefix}_mmd(skip_idx={skip_idx})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
@@ -268,7 +269,7 @@ class CellMNN(pl.LightningModule):
             num_iter_max=num_iter_max,
             n=n,
         )
-        self.log(f"val_emd(skip_idx={skip_idx})", emd)
+        self.log(f"{prefix}_emd(skip_idx={skip_idx})", emd)
         return emd
 
     def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues") -> None:
