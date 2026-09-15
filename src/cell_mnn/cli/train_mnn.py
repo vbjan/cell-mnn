@@ -2,6 +2,7 @@ from typing import Optional, Sequence
 
 from cell_mnn.model import CellMNN
 from cell_mnn.metrics import DEFAULT_EVAL_N_SAMPLES
+from cell_mnn.checks import require
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
 from cell_mnn.data.data_loading import build_datasets
 from cell_mnn.data.sources import load_marginals
@@ -73,6 +74,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
+    require(
+        args.check_val_every_n_epoch <= args.epochs,
+        f"check_val_every_n_epoch={args.check_val_every_n_epoch} exceeds epochs={args.epochs}: "
+        "Lower --check_val_every_n_epoch or raise --epochs."
+    )
     fix_seed(args.seed, use_det_algos=False)
     use_cuda = True
     device = torch.device('cuda' if use_cuda else 'cpu')
@@ -169,6 +175,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         train_dataloaders=dataloader,
         val_dataloaders=val_loader,
         ckpt_path=args.resume_from_checkpoint
+    )
+
+    require(
+        checkpoint_callback.best_model_path,
+        "no checkpoint was saved: training stopped before any validation epoch completed "
+        f"(check_val_every_n_epoch={args.check_val_every_n_epoch}, "
+        f"time_limit={args.time_limit}min, debug={args.debug}). Lower "
+        "--check_val_every_n_epoch, raise --time_limit, or drop --debug."
     )
 
     hp_path = os.path.join(

@@ -18,6 +18,7 @@ from torchdyn.core import NeuralODE
 from torchcfm.utils import torch_wrapper
 
 from cell_mnn.metrics import DEFAULT_EVAL_N_SAMPLES, MMDLoss, compute_wasserstein
+from cell_mnn.checks import require
 from cell_mnn.utils import save_hyperparams_to_json, fix_seed
 
 
@@ -201,6 +202,11 @@ class FlowMatchingModel(pl.LightningModule):
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
+    require(
+        args.check_val_every_n_epoch <= args.epochs,
+        f"check_val_every_n_epoch={args.check_val_every_n_epoch} exceeds epochs={args.epochs}: "
+        "Lower --check_val_every_n_epoch or raise --epochs."
+    )
     fix_seed(args.seed, use_det_algos=False)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -304,6 +310,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         best_model = cfm_model
         print("Debug mode: Using the model from training (no checkpoint loading)")
     else:
+        require(
+            checkpoint_callback.best_model_path,
+            "no checkpoint was saved: training stopped before any validation epoch completed "
+            f"(check_val_every_n_epoch={args.check_val_every_n_epoch}, "
+            f"time_limit={args.time_limit}min). Lower --check_val_every_n_epoch or raise "
+            "--time_limit."
+        )
         best_model = FlowMatchingModel.load_from_checkpoint(checkpoint_callback.best_model_path,
                                                             dim=latent_dim,
                                                             skip_idx=args.skip_idx,
