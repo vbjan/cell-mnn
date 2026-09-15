@@ -55,6 +55,14 @@ class TimeFilteredDataset(IterableDataset):
         self.skip_idx = skip_idx
         self.train_marginals = marginals if train_on_skip else marginals.drop(skip_idx)
 
+        require(
+            self.train_marginals.n_times >= 2,
+            f"not enough timepoints to train on: marginals.n_times={marginals.n_times}, "
+            f"skip_idx={skip_idx}, train_on_all_times={train_on_skip} leaves "
+            f"train_marginals.n_times={self.train_marginals.n_times}, but at least 2 are "
+            "required. Need n_times >= 3 unless --train_on_all_times, which needs n_times >= 2."
+        )
+
         self.batch_size = batch_size
         self.device = device
 
