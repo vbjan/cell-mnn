@@ -23,23 +23,29 @@ conda env create -f environment.yml && conda activate cell_mnn_env
 chmod +x data/download_data.sh && ./data/download_data.sh
 ```
 
-There is **no `pyproject.toml` yet** (Phase 1 of `LIBRARY_MIGRATION.md` is unfinished), so `import cell_mnn` fails from the repo root. Until packaging lands, prefix commands with `PYTHONPATH=src`.
+`pyproject.toml` declares the package (setuptools, `src` layout, version read from `cell_mnn.__version__`), so `pip install -e .` makes `import cell_mnn` work from any cwd in that env and installs two console scripts. **The `[project.dependencies]` list is hand-written and is the real runtime set — `environment.yml` is a `pip freeze` of a working env, not a dependency spec. Don't sync one from the other.** The CFM baselines (`torchcfm`, `torchdyn`) are an optional `baselines` extra, not core.
+
+```bash
+pip install -e '.[baselines]'   # or `pip install -e .` for Cell-MNN only
+```
+
+Without the install, everything below still works if you prefix it with `PYTHONPATH=src` and use `python -m cell_mnn.cli.train_mnn` in place of the console script.
 
 ```bash
 # Train + auto-evaluate Cell-MNN, holding out marginal `skip_idx`
-PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name embryoid
+cell-mnn-train --skip_idx 1 --ds_name embryoid
 
 # Extra random timepoints for the kinetic regularizer
-PYTHONPATH=src python -m cell_mnn.cli.train_mnn --skip_idx 1 --ds_name embryoid --kinetic_grid_multiplier 4
+cell-mnn-train --skip_idx 1 --ds_name embryoid --kinetic_grid_multiplier 4
 
 # Baselines (I-CFM / OT-CFM), same CLI shape
-PYTHONPATH=src python -m cell_mnn.cli.train_cfm --skip_idx 1 --ds_name embryoid --method i-cfm
+cell-mnn-train-cfm --skip_idx 1 --ds_name embryoid --method i-cfm
 
 # Your own dataset: add a table to datasets.toml, then name it. --datasets points
 # at a config elsewhere; paths inside it resolve against *its* directory.
-PYTHONPATH=src python -m cell_mnn.cli.train_mnn --ds_name my_timecourse --datasets ~/proj/datasets.toml
+cell-mnn-train --ds_name my_timecourse --datasets ~/proj/datasets.toml
 
-# Data utilities (plain scripts, no PYTHONPATH needed)
+# Data utilities (plain scripts, not part of the package)
 python data/inflate_data.py data/ebdata/eb_velocity_v5.npz 50000 --noise_std 0.1
 python data/recompute_pca.py data/ebdata/ebdata_v3.h5ad -n 50
 ```
@@ -47,7 +53,7 @@ python data/recompute_pca.py data/ebdata/ebdata_v3.h5ad -n 50
 `train_mnn.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --seed --lr --weight_decay --batch_size --train_on_all_times --lambda_kinetic --gamma --kinetic_grid_multiplier --width --depth --init_scale --mmd_sigma --ds_name --datasets --n_features --no_standardize --no_time_scaling --eval_n_samples --resume_from_checkpoint`.
 `train_cfm.py` flags: `--epochs --skip_idx --debug --patience --time_limit --check_val_every_n_epoch --method --seed --ds_name --datasets --n_features --no_standardize --no_time_scaling --batch_size --eval_n_samples`.
 
-There is **no test suite** (`pytest` is in the env but no test files exist). The closest thing to unit checks are the `__main__` blocks in `src/cell_mnn/data/sources.py` and `data_loading.py`. `PYTHONPATH=src python -m cell_mnn.data.sources` is the useful one on a fresh clone: it walks every entry in `./datasets.toml` and prints the `TimeSeriesMarginals` it got, the declared path for the ones whose files are missing, or the config error for a malformed table — reporting per entry rather than dying on the first, which makes it the config validator.
+There is **no test suite** (`pytest` is in the env but no test files exist). The closest thing to unit checks are the `__main__` blocks in `src/cell_mnn/data/sources.py` and `data_loading.py`. `python -m cell_mnn.data.sources` is the useful one on a fresh clone: it walks every entry in `./datasets.toml` and prints the `TimeSeriesMarginals` it got, the declared path for the ones whose files are missing, or the config error for a malformed table — reporting per entry rather than dying on the first, which makes it the config validator.
 
 Operational notes:
 - **Dataset paths resolve against the config file**, so the CLIs no longer need to run from the repo root *for data*. Everything else still does: `weights/`, `logs/`, and `data/inflate_data.py` / `recompute_pca.py` all use cwd-relative paths.
@@ -102,7 +108,7 @@ Every dataset is an `IterableDataset` that yields *already-batched* tensors on t
 - `SkipMarginalEvalDataset` → `(x_t_prev, t, x_t_skip, t_skip, skip_idx)`. `t_skip` decodes the trajectory, `skip_idx` names the metric. Used for val/test by **both** methods. It always yields both marginals **whole**, in one batch (`__len__` is 1), and has **no `batch_size`** — at `n_features` ~ 5 even a 50k-cell marginal is about 1 MB, so nothing about *loading* it needs batching. The expense is entirely in the metrics, so their sample budget lives with them (§4) instead of here. Don't reintroduce a validation batch size: it silently made the reported metric a function of `--batch_size`.
 - `IndependentFlowMatchingDataset` / `BatchOTFlowMatchingDataset` / `OTFlowMatchingDataset` → `(xT, T, uT)` for the CFM baselines, with `t∈[0,1]` rescaled onto the real interval `[t_i, t_j]` and displacement converted to per-unit-time velocity (`u_t / delta_t`). This is what lets the baselines handle non-uniform time gaps and the skipped timepoint.
 - `FlowMatchingModel` integrates with a **fixed step count** (`n_steps=100` per skipped interval, `torch.linspace`), not an absolute `dt`. An absolute `dt=0.01` made integration accuracy a function of the time units — under `minmax_time` a `cite` gap would have dropped from ~301 RK4 steps to ~61, silently degrading the baseline while Cell-MNN was unaffected. `t_span` is built on the batch's device.
-- `build_datasets(marginals, ...)` is the single entry point used by both training scripts, building the train/val pair from a `TimeSeriesMarginals`; `method` (`"mnn"`, `"i-cfm"`, `"batch-ot-cfm"`, `"ot-cfm"`) selects the train-dataset class via the `TRAIN_DATASET_BY_METHOD` table. Its `batch_size` is the **training** batch size only — it reaches no part of the eval path. All four train classes take the same constructor keywords; the three CFM baselines differ only in the `flow_matcher_cls` class attribute, so adding a baseline means one subclass plus one table entry. Cell sampling goes through the module-level `to_tensor` / `sample_cells` helpers.
+- `build_datasets(marginals, ...)` is the single entry point used by both training scripts, building the train/val pair from a `TimeSeriesMarginals`; `method` (`"mnn"`, `"i-cfm"`, `"batch-ot-cfm"`, `"ot-cfm"`) selects the train-dataset class via the `TRAIN_DATASET_BY_METHOD` table. Its `batch_size` is the **training** batch size only — it reaches no part of the eval path. All four train classes take the same constructor keywords; the three CFM baselines differ only in the `flow_matcher_name` class attribute — the *name* of a `torchcfm` class, resolved at construction by `build_flow_matcher` so that `import cell_mnn` doesn't require torchcfm — so adding a baseline means one subclass plus one table entry. Cell sampling goes through the module-level `to_tensor` / `sample_cells` helpers.
 
 **3. Model — `src/cell_mnn/model.py::CellMNN` (`pl.LightningModule`)**
 `encode(x_t, t)`: one MLP (LeakyReLU, `depth` hidden layers of `width`, kaiming-init, last layer scaled by `init_scale`) maps the `D+1` input to `latent_dim²` outputs, reshaped **directly** into the local operator `A` of shape `(B, 1, D, D)`. There is no eigen-parameterization — no `P`, no eigenvalue vector, no `num_const_dims` ablation.

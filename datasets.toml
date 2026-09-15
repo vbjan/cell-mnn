@@ -20,7 +20,7 @@
 
 [embryoid]
 type = "npz"
-path = "data/ebdata/eb_velocity_v5.npz"
+path = "data/eb_velocity_v5.npz"
 
 [embryoid_less_preprocessed]
 type = "anndata"

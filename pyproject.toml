@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cell-mnn"
+description = "Cell Mechanistic Neural Networks: a locally linearized ODE as the latent of an encoder/decoder over single-cell trajectories."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"          # tomllib (3.11) is the binding constraint
+dynamic = ["version"]               # single source: cell_mnn.__version__
+authors = [{ name = "Jan von Bassewitz", email = "jbassewitz@ist.ac.at" }]
+
+# The real runtime set, hand-written. environment.yml is a `pip freeze` of a
+# working env (190 packages) and is not a dependency spec -- don't sync them.
+dependencies = [
+    "torch>=2.4",
+    "pytorch-lightning>=2.2",
+    "numpy>=1.26",
+    "einops>=0.8",
+    "pot>=0.9",                     # `import ot`, the exact Wasserstein solve
+    "scanpy>=1.10",                 # AnnDataSource only; imported lazily
+    "wandb>=0.17",                  # both CLIs build a WandbLogger unconditionally
+]
+
+[project.optional-dependencies]
+# The CFM baselines. Kept out of the core so that `import cell_mnn` for
+# TimeSeriesMarginals / CellMNN doesn't require the baseline stack.
+baselines = [
+    "torchcfm>=1.0",
+    "torchdyn>=1.0",
+]
+
+[project.scripts]
+# Namespaced rather than `train-mnn`, because this installs into a shared conda
+# env alongside other projects' entry points.
+cell-mnn-train = "cell_mnn.cli.train_mnn:main"
+cell-mnn-train-cfm = "cell_mnn.cli.train_cfm:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cell_mnn = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cell_mnn.__version__" }

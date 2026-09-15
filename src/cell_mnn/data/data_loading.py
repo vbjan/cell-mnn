@@ -5,7 +5,6 @@ import torch
 import numpy as np
 
 from torch.utils.data import IterableDataset
-from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher, ConditionalFlowMatcher
 from einops import repeat
 from ..checks import require
 from .sources import load_marginals
@@ -76,19 +75,37 @@ class TimeFilteredDataset(IterableDataset):
         return int(self.train_marginals.n_cells / self.batch_size)
 
 
+def build_flow_matcher(name: str, sigma: float) -> Any:
+    """
+    Construct the named `torchcfm` flow matcher.
+
+    torchcfm is imported here rather than at module scope so that
+    `import cell_mnn` does not pull in the baseline stack 
+    """
+    try:
+        from torchcfm import conditional_flow_matching as cfm
+    except ImportError as err:
+        raise ImportError(
+            "the CFM baselines need torchcfm; install it with "
+            "`pip install 'cell-mnn[baselines]'`"
+        ) from err
+    return getattr(cfm, name)(sigma=sigma)
+
+
 class FlowMatchingDataset(TimeFilteredDataset):
     """
-    Base for the CFM baselines. Subclasses only pick `flow_matcher_cls`, so every
+    Base for the CFM baselines. Subclasses only pick `flow_matcher_name`, so every
     train dataset in this module takes the same constructor keywords.
     """
 
-    flow_matcher_cls: type[ConditionalFlowMatcher] | None = None
+    # torchcfm class name, resolved at construction (see `build_flow_matcher`).
+    flow_matcher_name: str | None = None
 
     def __init__(self, *args: Any, sigma: float = 0.1, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        assert self.flow_matcher_cls is not None, \
-            f"{type(self).__name__} must set flow_matcher_cls"
-        self.flow_matcher = self.flow_matcher_cls(sigma=sigma)
+        assert self.flow_matcher_name is not None, \
+            f"{type(self).__name__} must set flow_matcher_name"
+        self.flow_matcher = build_flow_matcher(self.flow_matcher_name, sigma=sigma)
 
     def _pair(self, i: int) -> tuple[np.ndarray, np.ndarray, float, float]:
         # Consecutive pair in the *surviving* grid: if skip_idx=3, the supervised
@@ -138,11 +155,11 @@ class FlowMatchingDataset(TimeFilteredDataset):
 
 
 class IndependentFlowMatchingDataset(FlowMatchingDataset):
-    flow_matcher_cls = ConditionalFlowMatcher
+    flow_matcher_name = "ConditionalFlowMatcher"
 
 
 class BatchOTFlowMatchingDataset(FlowMatchingDataset):
-    flow_matcher_cls = ExactOptimalTransportConditionalFlowMatcher
+    flow_matcher_name = "ExactOptimalTransportConditionalFlowMatcher"
 
 
 class OTFlowMatchingDataset(FlowMatchingDataset):
@@ -155,7 +172,7 @@ class OTFlowMatchingDataset(FlowMatchingDataset):
     precomputed pairs during iteration.
     """
 
-    flow_matcher_cls = ExactOptimalTransportConditionalFlowMatcher
+    flow_matcher_name = "ExactOptimalTransportConditionalFlowMatcher"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
