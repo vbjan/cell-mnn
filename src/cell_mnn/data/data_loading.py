@@ -191,52 +191,32 @@ class SkipMarginalEvalDataset(IterableDataset):
             self,
             marginals: TimeSeriesMarginals,
             device: torch.device | str,
-            skip_idx: int,
-            batch_size: int | None = None
+            skip_idx: int
         ) -> None:
         super().__init__()
 
         assert_valid_skip_idx(skip_idx, marginals.n_times)
 
         self.skip_idx = skip_idx
-        self.batch_size = batch_size
 
         # Predict the distribution at t_skip from the previous timepoint.
         self.X_t_skip, self.t_skip = marginals[skip_idx]
         self.X_t_prev, self.t_prev = marginals[skip_idx - 1]
 
-        require(
-            batch_size is None or self.X_t_prev.shape[0] >= batch_size,
-            f"X_t_prev has {self.X_t_prev.shape[0]} cells, smaller than "
-            f"batch_size={batch_size}: __len__ would be 0, so the eval loop would "
-            "never yield a batch. Lower --batch_size or use a larger dataset."
-        )
-
         self.device = device
 
-    def _load_marginal(self, X: np.ndarray) -> torch.Tensor:
-        # batch_size None loads the whole marginal, in order, in a single batch
-        indices = (np.arange(X.shape[0]) if self.batch_size is None
-                   else np.random.randint(0, X.shape[0], size=self.batch_size))
-        return to_tensor(X[indices], self.device)
-
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int]]:
+        # Both marginals are constant across yields, so they cross to the device once.
+        x_t_prev = to_tensor(self.X_t_prev, self.device)
+        x_t_skip = to_tensor(self.X_t_skip, self.device)
+        t = torch.full((x_t_prev.shape[0],), float(self.t_prev), device=self.device)
+
         while True:
-            x_t_prev = self._load_marginal(self.X_t_prev)
-            x_t_skip = self._load_marginal(self.X_t_skip)
-
-            t = torch.full((x_t_prev.shape[0],), float(
-                self.t_prev), device=self.device)
-
             yield (x_t_prev, t, x_t_skip, self.t_skip, self.skip_idx)
 
     def __len__(self) -> int:
-        if self.batch_size is None:
-            # Original behavior: everything is loaded in one batch
-            return 1
-        else:
-            # Number of batches needed to see all data once
-            return int(self.X_t_prev.shape[0] / self.batch_size)
+        # One batch: the whole held-out marginal and the whole marginal before it.
+        return 1
 
 
 class MnnDataset(TimeFilteredDataset):
@@ -304,6 +284,8 @@ def build_datasets(
     ) -> tuple[TimeFilteredDataset, SkipMarginalEvalDataset]:
     """
     (train_dataset, val_dataset) for `marginals`, holding out marginal `skip_idx`.
+
+    `batch_size` is the *training* batch size only. Validation yields whole marginals;
     """
     require(method in TRAIN_DATASET_BY_METHOD,
             f"Unrecognized method: {method}. "
@@ -317,13 +299,10 @@ def build_datasets(
         device=device,
         train_on_skip=train_on_all_times
     )
-    # Compute validation score batch wise only if dataset is too big to compute OT for all points
-    too_big = marginals.cells_per_t[0] > 10_000
     val_dataset = SkipMarginalEvalDataset(
         marginals=marginals,
         device=device,
         skip_idx=skip_idx,
-        batch_size=batch_size if too_big else None,
     )
     return train_dataset, val_dataset
 

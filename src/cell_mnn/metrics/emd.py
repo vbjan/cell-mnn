@@ -13,11 +13,19 @@ def compute_cost_matrix(dist1: np.ndarray, dist2: np.ndarray, p: int = 1) -> np.
     return cost_matrix
 
 
+def _subsample(dist: np.ndarray, n: int | None) -> np.ndarray:
+    """`n` rows of `dist`, drawn without replacement; all of them if it already fits."""
+    if n is None or dist.shape[0] <= n:
+        return dist
+    return dist[np.random.choice(dist.shape[0], size=n, replace=False)]
+
+
 def compute_wasserstein(
         dist1: np.ndarray, 
         dist2: np.ndarray, 
         p: int = 1,
-        num_iter_max: int = 200_000
+        num_iter_max: int = 200_000,
+        n: int | None = None
         ) -> float:
     """
     Compute the Wasserstein-p Distance between two distributions.
@@ -26,10 +34,17 @@ def compute_wasserstein(
         dist1: First distribution as a numpy array of shape (n, d).
         dist2: Second distribution as a numpy array of shape (m, d).
         p: Order of the Wasserstein distance (default: 1 for W1, use 2 for W2).
+        num_iter_max: Iteration cap for the network simplex.
+        n: Samples drawn from each distribution before solving, without replacement.
+            None uses every sample. The estimate is biased *upward* and the bias shrinks only like n^(-1/d), so
+            results compare only across calls sharing the same `n`.
 
     Returns:
         The Wasserstein-p Distance (float) between the two distributions.
     """
+    dist1 = _subsample(dist1, n)
+    dist2 = _subsample(dist2, n)
+
     n_samples_1 = dist1.shape[0]
     n_samples_2 = dist2.shape[0]
 
@@ -70,4 +85,3 @@ def compute_ot_coupling(
 
     paired_next = dist2[np.asarray(choices)]  
     return paired_next
-

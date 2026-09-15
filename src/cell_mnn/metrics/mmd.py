@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 
 
+def _subsample(x: torch.Tensor, n: int | None) -> torch.Tensor:
+    """`n` samples along the sample axis of `x` (..., N, D), without replacement."""
+    if n is None or x.shape[-2] <= n:
+        return x
+    idx = torch.randperm(x.shape[-2], device=x.device)[:n]
+    return x[..., idx, :]
+
+
 class MMDLoss(nn.Module):
     """
     Computes the MMD^2 between two sets of samples x1, x2 
@@ -34,12 +42,20 @@ class MMDLoss(nn.Module):
 
         return torch.exp(-dists / self.sigma)   # dividing by D
 
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, n=None):
+        """
+        `n` samples are drawn from each of x1 and x2 without replacement before the
+        kernel matrices are built; None (the default, and what training uses) keeps
+        every sample. 
+        """
         # Ensure x1, x2 have a batch dimension of size 1 if none is present
         if x1.dim() == 2:
             x1 = x1.unsqueeze(0)  # -> [1, N, D]
         if x2.dim() == 2:
             x2 = x2.unsqueeze(0)  # -> [1, M, D]
+
+        x1 = _subsample(x1, n)
+        x2 = _subsample(x2, n)
 
         Kxx = self.laplace_kernel(x1, x1)  # [B, N, N]
         Kyy = self.laplace_kernel(x2, x2)  # [B, M, M]
@@ -50,4 +66,3 @@ class MMDLoss(nn.Module):
         
         # Return the average MMD over the batch to get a scalar
         return mmd_per_batch.mean()
-    

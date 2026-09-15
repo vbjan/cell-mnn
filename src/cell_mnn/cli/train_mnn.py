@@ -1,6 +1,7 @@
 from typing import Optional, Sequence
 
 from cell_mnn.model import CellMNN
+from cell_mnn.metrics import DEFAULT_EVAL_N_SAMPLES
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
 from cell_mnn.data.data_loading import build_datasets
 from cell_mnn.data.sources import load_marginals
@@ -62,6 +63,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Skip the pooled z-score of the features over all timepoints')
     parser.add_argument('--no_time_scaling', action='store_true',
                         help='Skip min-max scaling of t_grid onto [0, 1]')
+    parser.add_argument('--eval_n_samples', type=int, default=DEFAULT_EVAL_N_SAMPLES,
+                        help='Samples drawn per marginal when scoring val/test MMD and EMD. '
+                             'Marginals smaller than this are scored exactly. 0 for no cap')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
     return parser.parse_args(argv)
@@ -108,6 +112,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         init_scale=args.init_scale,
         weight_decay=args.weight_decay,
         mmd_sigma=args.mmd_sigma,
+        # 0 on the CLI means "no cap": score the full marginals.
+        eval_n_samples=args.eval_n_samples if args.eval_n_samples > 0 else None,
     )
     wandb_logger = WandbLogger(
         project=f"scrna-seq-full-decomp_{args.ds_name}",

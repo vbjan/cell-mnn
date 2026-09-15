@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from einops import rearrange, repeat
 
-from .metrics import MMDLoss, compute_wasserstein
+from .metrics import DEFAULT_EVAL_N_SAMPLES, MMDLoss, compute_wasserstein
 
 
 class MLP(torch.nn.Module):
@@ -56,6 +56,7 @@ class CellMNN(pl.LightningModule):
         weight_decay: float = 1e-5,
         mmd_sigma: float = 1.0,
         kinetic_grid_multiplier: int = 0,
+        eval_n_samples: int | None = DEFAULT_EVAL_N_SAMPLES,
     ):
         super(CellMNN, self).__init__()
 
@@ -79,6 +80,7 @@ class CellMNN(pl.LightningModule):
         self.lambda_kinetic = lambda_kinetic
         self.gamma = gamma
         self.kinetic_grid_multiplier = kinetic_grid_multiplier
+        self.eval_n_samples = eval_n_samples
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(self.parameters(),
@@ -222,9 +224,27 @@ class CellMNN(pl.LightningModule):
     def validation_step(
         self,
         # (I,), (I, D), (I, D), scalar, scalar
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float, int],  
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float, int],
         batch_idx: int,
         num_iter_max: int = 200_000
+    ) -> float:
+        return self._eval_step(batch, batch_idx, num_iter_max=num_iter_max, n=self.eval_n_samples)
+
+    def test_step(
+        self,
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float, int],
+        batch_idx: int
+    ) -> float:
+        # n=None scores every cell of the left-out marginal, not just eval_n_samples of them.
+        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None)
+
+    def _eval_step(
+        self,
+        # (I,), (I, D), (I, D), scalar, scalar
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float, int],
+        batch_idx: int,
+        num_iter_max: int,
+        n: int | None,
     ) -> float:
         # t_skip is where the trajectory is decoded; skip_idx names the metric. Keying
         # on the index keeps `val_emd(...)` stable under any rescaling of t_grid.
@@ -239,23 +259,17 @@ class CellMNN(pl.LightningModule):
 
         self.log_A_eigenvalues(A)
 
-        mmd = self.loss_fn(pred_dist, x_t_skip)
+        mmd = self.loss_fn(pred_dist, x_t_skip, n=n)
         self.log(f"val_mmd(skip_idx={skip_idx})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
             x_t_skip.cpu().numpy(),
-            num_iter_max=num_iter_max
+            num_iter_max=num_iter_max,
+            n=n,
         )
         self.log(f"val_emd(skip_idx={skip_idx})", emd)
         return emd
-    
-    def test_step(
-        self,
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int | float, int],
-        batch_idx: int
-    ) -> float:
-        return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
     def log_A_eigenvalues(self, A: torch.Tensor, tag: str = "A_eigenvalues") -> None:
         if not isinstance(self.logger, WandbLogger):

@@ -17,7 +17,7 @@ from cell_mnn.data.sources import load_marginals
 from torchdyn.core import NeuralODE
 from torchcfm.utils import torch_wrapper
 
-from cell_mnn.metrics import compute_wasserstein, MMDLoss
+from cell_mnn.metrics import DEFAULT_EVAL_N_SAMPLES, MMDLoss, compute_wasserstein
 from cell_mnn.utils import save_hyperparams_to_json, fix_seed
 
 
@@ -53,6 +53,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help='Skip min-max scaling of t_grid onto [0, 1]')
     parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch size for training')
+    parser.add_argument('--eval_n_samples', type=int, default=DEFAULT_EVAL_N_SAMPLES,
+                        help='Samples per marginal when scoring val/test MMD and EMD.' \
+                        '0 means no cap.')
     return parser.parse_args(argv)
 
 
@@ -95,7 +98,8 @@ class FlowMatchingModel(pl.LightningModule):
             t_grid: Sequence[float],
             lr: float,
             w: int = 64,
-            n_steps: int = 100
+            n_steps: int = 100,
+            eval_n_samples: int | None = DEFAULT_EVAL_N_SAMPLES
         ) -> None:
         super().__init__()
         self.ot_cfm_model = CFMVelocityMLP(dim=dim, time_varying=True, w=64)
@@ -111,6 +115,7 @@ class FlowMatchingModel(pl.LightningModule):
         # Steps per interval, not an absolute dt: integration accuracy must not depend
         # on whether t_grid is in days or scaled onto [0, 1].
         self.n_steps = n_steps
+        self.eval_n_samples = eval_n_samples
         self.mmd_loss = MMDLoss(sigma=1.0)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
@@ -145,7 +150,25 @@ class FlowMatchingModel(pl.LightningModule):
             batch_idx: int,
             num_iter_max: int = 200_000
         ) -> float:
+        return self._eval_step(batch, batch_idx, num_iter_max=num_iter_max, n=self.eval_n_samples)
+
+    def test_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int],
+            batch_idx: int
+        ) -> float:
+        # n=None scores every cell of the left-out marginal, not just eval_n_samples of them.
+        return self._eval_step(batch, batch_idx, num_iter_max=1_000_000, n=None)
+
+    def _eval_step(
+            self,
+            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int],
+            batch_idx: int,
+            num_iter_max: int,
+            n: int | None,
+        ) -> float:
         x_t_prev, t, x_t_skip, _, _ = batch
+
         t_span = torch.linspace(self.t_prev, self.t_skip, self.n_steps + 1,
                                 device=x_t_prev.device)
         traj = self.node.trajectory(
@@ -155,23 +178,18 @@ class FlowMatchingModel(pl.LightningModule):
         # get predicted distribution at the last timepoint
         pred_dist = traj[-1, :, :]
 
-        mmd = self.mmd_loss(pred_dist, x_t_skip)
+        # Each metric samples down to what it can afford, independently of the other.
+        mmd = self.mmd_loss(pred_dist, x_t_skip, n=n)
         self.log(f"val_mmd(skip_idx={self.skip_idx})", mmd.cpu().item())
 
         emd = compute_wasserstein(
             pred_dist.cpu().numpy(),
             x_t_skip.cpu().numpy(),
-            num_iter_max=num_iter_max)
+            num_iter_max=num_iter_max,
+            n=n)
         self.log(f"val_emd(skip_idx={self.skip_idx})", emd)
 
         return emd
-
-    def test_step(
-            self,
-            batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, int],
-            batch_idx: int
-        ) -> float:
-        return self.validation_step(batch, batch_idx, num_iter_max=1_000_000)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         optimizer = torch.optim.AdamW(self.ot_cfm_model.parameters(),
@@ -215,11 +233,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     train_loader = DataLoader(train_dataset, batch_size=None, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=None, num_workers=num_workers)
 
+    # 0 on the CLI means "no cap": score the full marginals.
+    eval_n_samples = args.eval_n_samples if args.eval_n_samples > 0 else None
+
     cfm_model = FlowMatchingModel(
         dim=latent_dim,
         skip_idx=args.skip_idx,
         lr=lr,
         t_grid=marginals.t_grid,
+        eval_n_samples=eval_n_samples,
     ).to(device)
     model_name = f"{args.method}_{latent_dim}-dim_pca_skip_idx{args.skip_idx}_{timestamp}"
 
@@ -285,7 +307,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                                                             dim=latent_dim,
                                                             skip_idx=args.skip_idx,
                                                             lr=1e-4,
-                                                            t_grid=marginals.t_grid)
+                                                            t_grid=marginals.t_grid,
+                                                            eval_n_samples=eval_n_samples)
 
     # Evaluate the best model on the test dataset
     print("\nEvaluating best model on test dataset...")
