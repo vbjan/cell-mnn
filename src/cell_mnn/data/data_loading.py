@@ -62,6 +62,11 @@ class TimeFilteredDataset(IterableDataset):
             f"train_marginals.n_times={self.train_marginals.n_times}, but at least 2 are "
             "required. Need n_times >= 3 unless --train_on_all_times, which needs n_times >= 2."
         )
+        require(
+            self.train_marginals.n_cells >= batch_size,
+            f"train_marginals.n_cells={self.train_marginals.n_cells} is smaller than "
+            f"batch_size={batch_size}: __len__ would be 0. Lower --batch_size or use a larger dataset."
+        )
 
         self.batch_size = batch_size
         self.device = device
@@ -199,6 +204,13 @@ class SkipMarginalEvalDataset(IterableDataset):
         # Predict the distribution at t_skip from the previous timepoint.
         self.X_t_skip, self.t_skip = marginals[skip_idx]
         self.X_t_prev, self.t_prev = marginals[skip_idx - 1]
+
+        require(
+            batch_size is None or self.X_t_prev.shape[0] >= batch_size,
+            f"X_t_prev has {self.X_t_prev.shape[0]} cells, smaller than "
+            f"batch_size={batch_size}: __len__ would be 0, so the eval loop would "
+            "never yield a batch. Lower --batch_size or use a larger dataset."
+        )
 
         self.device = device
 
