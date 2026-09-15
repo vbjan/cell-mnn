@@ -6,6 +6,7 @@ from cell_mnn.checks import require
 from cell_mnn.utils import fix_seed, save_hyperparams_to_json
 from cell_mnn.data.data_loading import build_datasets
 from cell_mnn.data.sources import load_marginals
+from cell_mnn.cli.config import add_config_arg, apply_config_defaults
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pytorch_lightning as pl
@@ -21,6 +22,7 @@ import uuid
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Train an MNN prediction model on embryoid data')
+    add_config_arg(parser)
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Maximum number of epochs')
     parser.add_argument('--skip_idx', type=int, default=1,
@@ -69,6 +71,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                              'Marginals smaller than this are scored exactly. 0 for no cap')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint file to resume training from')
+    apply_config_defaults(parser, argv)
     return parser.parse_args(argv)
 
 

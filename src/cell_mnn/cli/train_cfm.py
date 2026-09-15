@@ -20,12 +20,14 @@ from torchcfm.utils import torch_wrapper
 from cell_mnn.metrics import DEFAULT_EVAL_N_SAMPLES, MMDLoss, compute_wasserstein
 from cell_mnn.checks import require
 from cell_mnn.utils import save_hyperparams_to_json, fix_seed
+from cell_mnn.cli.config import add_config_arg, apply_config_defaults
 
 
 # Parse command-line arguments
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Train a Flow Matching model on embryoid data')
+    add_config_arg(parser)
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Maximum number of epochs')
     parser.add_argument('--skip_idx', type=int, default=1,
@@ -57,6 +59,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument('--eval_n_samples', type=int, default=DEFAULT_EVAL_N_SAMPLES,
                         help='Samples per marginal when scoring val/test MMD and EMD.' \
                         '0 means no cap.')
+    apply_config_defaults(parser, argv)
     return parser.parse_args(argv)
 
 
