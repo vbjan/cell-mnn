@@ -44,11 +44,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         default=200, help='Batch size')
     parser.add_argument('--train_on_all_times', action='store_true',
                         help='Train on all timepoints in the dataset (training on validation data)')
-    parser.add_argument('--lambda_kinetic', type=float, default=0.1,
+    parser.add_argument('--lambda_kinetic', type=float, default=0.005,
                         help='Weight factor for kinetic energy regularizer.')
     parser.add_argument('--gamma', type=float, default=0.1,
                         help='Weight factor for kinetic energy regularizer.')
-    parser.add_argument('--kinetic_grid_multiplier', type=int, default=0,
+    parser.add_argument('--kinetic_grid_multiplier', type=int, default=2,
                         help='Factor by which to increase the number of timepoints for kinetic reg')
     parser.add_argument('--width', type=int, default=96, help='Width of MLP')
     parser.add_argument('--depth', type=int, default=4, help='Depth of MLP')
