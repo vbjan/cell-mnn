@@ -14,6 +14,22 @@ The data layer and both CLIs speak in **timepoints, not days**: `skip_idx`, `t_g
 
 The one exception is *data* column names, which must stay as they are on disk: `obs["day"]` and `obs["sample_labels"]` in the h5ad files, and the `'days'` / `'sample_labels'` keys in the npz (`data/inflate_data.py`).
 
+## Cluster
+
+- Shared conda env: dl_env_py3129 (Python 3.12.9). Run Python with
+  `conda run --no-capture-output -n dl_env_py3129 python ...`.
+- You are on a SLURM cluster, running on the shared login node. Only light work
+  (editing, git, quick inspection) belongs here. Anything heavier (training,
+  analysis scripts, loading big h5ad files) goes through `srun` (short, interactive)
+  or `sbatch` (long). Always pass `-c`, `--mem`, and `--time`
+  (e.g. `srun -c 6 --mem=32G --time=2:00:00 ...`). Assume at most 32 CPUs / 128G RAM.
+- GPU only if really needed: `--gres=gpu:1 --partition=gpu`
+  (or `--partition=visualize` for a smaller GPU).
+- Login-node disk is tiny and shared. Never write logs, checkpoints, or outputs to
+  `/tmp`. Use the session scratchpad for small temporary files, and the
+  project directory or /localhome/jvonbass/tmp for anything larger. Send long job
+  output to a log file instead of the terminal, and delete temporary files when done.
+
 ## Setup & commands
 
 ```bash
